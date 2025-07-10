@@ -1,23 +1,65 @@
-# 千牛客服自动化系统 - 通信模块
+# 千牛客服自动化系统
 
-本项目是千牛客服自动化系统的通信模块，主要负责与千牛客户端的实时消息交互。
+一个轻量级的千牛客服自动化系统，实现买家咨询消息的实时捕获与分类处理，提升客服效率。
+
+## 项目概述
+
+本项目旨在借鉴SaiNiuApi框架的设计理念，开发一个轻量级的千牛客服自动化系统，实现买家咨询消息的实时捕获与分类处理。系统主要包括通信模块和消息处理模块，通过WebSocket实现与千牛客户端的实时通信，并对消息进行智能分析和处理。
 
 ## 功能特性
 
-- WebSocket服务器实现，支持实时双向通信
-- 消息处理与路由机制
+- 实时捕获买家咨询消息
+- 自动分析消息内容和意图
+- 根据意图提供回复建议
+- 会话状态管理
+- REST API 接口支持
+
+## 项目结构
+
+```
+qianniu-service/
+├── docs/                    # 文档目录
+│   ├── message-protocol.md  # 消息协议文档
+│   └── message-processor.md # 消息处理模块文档
+├── src/
+│   ├── config/              # 配置文件
+│   │   └── index.js         # 主配置
+│   ├── controllers/         # 控制器 (预留)
+│   ├── models/              # 数据模型 (预留)
+│   ├── services/            # 服务层
+│   │   ├── messageProcessor/  # 消息处理模块
+│   │   │   ├── data/          # 数据文件
+│   │   │   ├── index.js       # 消息处理主模块
+│   │   │   ├── MessageParser.js     # 消息解析器
+│   │   │   ├── IntentClassifier.js  # 意图分类器
+│   │   │   └── ReplyRecommender.js  # 回复推荐器
+│   │   └── websocketService.js # WebSocket服务
+│   ├── utils/               # 工具函数
+│   │   └── wsClient.js      # WebSocket客户端工具
+│   ├── tests/               # 测试文件
+│   │   ├── websocketService.test.js  # WebSocket服务测试
+│   │   └── messageProcessor.test.js  # 消息处理模块测试
+│   └── index.js             # 应用入口
+└── package.json             # 项目依赖
+```
+
+## 已完成模块
+
+### 1. 通信模块 (WebSocketService)
+
+- WebSocket服务器创建与配置
 - 客户端连接管理
-- 心跳检测确保连接稳定性
-- REST API接口用于系统状态监控和控制
-- 自动重连机制
+- 消息接收与发送
+- 心跳检测机制
+- 错误处理与连接恢复
 
-## 技术栈
+### 2. 消息处理模块 (MessageProcessor)
 
-- Node.js
-- Express (HTTP服务器)
-- ws (WebSocket实现)
-- dotenv (环境配置)
-- cors (跨域支持)
+- 消息解析与清理
+- 关键词提取
+- 意图识别
+- 回复推荐
+- 会话状态管理
 
 ## 安装与运行
 
@@ -27,108 +69,128 @@
 npm install
 ```
 
-### 配置环境变量
-
-创建或编辑 `.env` 文件：
-
-```
-PORT=8080            # HTTP服务端口
-NODE_ENV=development # 环境设置
-WS_PORT=8081         # WebSocket服务端口
-```
-
-### 启动服务
-
-开发模式（自动重启）:
+### 运行服务
 
 ```bash
-npm run dev
+node src/index.js
 ```
 
-生产模式:
+### 运行测试
 
 ```bash
-npm start
+# 测试WebSocket服务
+node src/tests/websocketService.test.js
+
+# 测试消息处理模块
+node src/tests/messageProcessor.test.js
 ```
 
-### 测试客户端
+## REST API 接口
 
-启动内置的WebSocket客户端测试工具：
-
-```bash
-npm run test-client
-```
-
-## API接口
-
-### 系统状态
+### 状态查询
 
 ```
-GET /
+GET /api/status
 ```
 
-返回系统基本状态信息。
-
-### WebSocket连接状态
+### 客户端列表
 
 ```
-GET /ws/status
+GET /api/clients
 ```
 
-返回WebSocket服务状态和当前连接的客户端信息。
+### 发送消息
+
+```
+POST /api/message
+Content-Type: application/json
+
+{
+  "clientId": "client-001",
+  "message": {
+    "type": "chat",
+    "content": "测试消息"
+  }
+}
+```
 
 ### 广播消息
 
 ```
-POST /ws/broadcast
+POST /api/broadcast
 Content-Type: application/json
 
 {
-  "message": "广播消息内容"
+  "message": {
+    "type": "system",
+    "content": "系统公告"
+  },
+  "exclude": ["client-001"]
 }
 ```
 
-向所有连接的客户端发送广播消息。
+### 消息处理测试
 
-## WebSocket消息格式
+```
+POST /api/process-message
+Content-Type: application/json
 
-客户端和服务器之间的消息采用JSON格式，包含以下基本结构：
+{
+  "message": {
+    "type": "chat",
+    "clientId": "test-client",
+    "content": "这个商品多少钱？"
+  }
+}
+```
 
+## WebSocket通信
+
+### 连接地址
+
+```
+ws://localhost:8080/ws
+```
+
+### 消息格式
+
+发送消息：
 ```json
 {
-  "type": "消息类型",
-  "content": "消息内容",
-  "timestamp": 1625647897000
+  "type": "chat",
+  "content": "这个商品多少钱？"
 }
 ```
 
-### 支持的消息类型
-
-- `chat`: 聊天消息
-- `ping`/`pong`: 心跳检测
-- `system`: 系统消息
-- `register`: 客户端注册信息
-
-## 目录结构
-
-```
-├── src/
-│   ├── config/        # 配置文件
-│   ├── controllers/   # 控制器 (待实现)
-│   ├── models/        # 数据模型 (待实现)
-│   ├── services/      # 服务层
-│   │   └── websocketService.js  # WebSocket服务实现
-│   ├── utils/         # 工具函数
-│   │   └── wsClient.js  # 测试客户端
-│   └── index.js       # 主入口文件
-├── .env               # 环境配置
-├── package.json
-└── README.md
+接收消息：
+```json
+{
+  "type": "chat",
+  "content": "这款产品的价格是XX元",
+  "timestamp": 1625097600000
+}
 ```
 
-## 后续开发计划
+## 后续计划
 
-- 消息处理模块：实现消息的分析与分类
-- 数据存储模块：保存消息历史和配置信息
-- 业务逻辑模块：实现客服自动化的核心功能
-- 用户界面模块：提供可视化操作界面 
+- 优化消息处理模块的意图识别准确率
+- 实现业务逻辑模块，处理具体业务场景
+- 开发数据存储模块，保存历史消息和统计信息
+- 开发用户界面，提供可视化操作
+
+## 依赖库
+
+- Express: Web服务框架
+- ws: WebSocket实现
+- natural: 自然语言处理
+- nodejieba: 中文分词
+
+## 参考文档
+
+- [消息协议文档](docs/message-protocol.md)
+- [消息处理模块文档](docs/message-processor.md)
+
+## 版本记录
+
+- v0.2.0: 实现消息处理模块 (2025/7/10)
+- v0.1.0: 实现WebSocket通信模块 (2025/7/8) 

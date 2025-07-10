@@ -1,0 +1,98 @@
+{
+  "replies": [
+    {
+      "intent": "问候",
+      "templates": [
+        "您好，很高兴为您服务，请问有什么可以帮到您？",
+        "您好，有什么可以帮您解决的问题？",
+        "您好，欢迎咨询，请问有什么需要了解的呢？",
+        "您好，我是客服小助手，很高兴为您服务！"
+      ]
+    },
+    {
+      "intent": "询问价格",
+      "templates": [
+        "这款产品的价格是{price}元，现在购买还有优惠活动哦！",
+        "目前该商品的售价是{price}元，正在进行限时优惠。",
+        "这款商品的价格是{price}元，支持多种支付方式。",
+        "该产品定价{price}元，现在下单还有额外赠品。"
+      ],
+      "variables": ["price"]
+    },
+    {
+      "intent": "查询物流",
+      "templates": [
+        "您的订单{orderId}已于{shipDate}发货，预计{arrivalDate}送达，物流单号为{trackingNumber}。",
+        "您好，订单{orderId}的物流状态是{status}，预计还需要{days}天送达。",
+        "您的包裹目前在{location}，正在由{company}配送中，预计{arrivalDate}送达。",
+        "根据物流信息显示，您的订单{orderId}已{status}，请耐心等待。"
+      ],
+      "variables": ["orderId", "shipDate", "arrivalDate", "trackingNumber", "status", "days", "location", "company"]
+    },
+    {
+      "intent": "售后问题",
+      "templates": [
+        "非常抱歉给您带来不便，您可以提供订单号和问题描述，我们将尽快处理您的售后申请。",
+        "很遗憾您遇到了问题，请提供订单信息和具体情况，我们会根据售后政策为您安排退换货事宜。",
+        "对于您遇到的问题，我们深表歉意。请详细描述问题，我们将优先处理您的售后需求。",
+        "请您提供订单号和商品问题的照片，我们的售后团队会第一时间处理您的问题。"
+      ]
+    },
+    {
+      "intent": "产品咨询",
+      "templates": [
+        "这款产品的{feature}是{description}，使用时{usage}。",
+        "关于您咨询的{feature}，具体情况是{description}，希望对您有所帮助。",
+        "这款商品的{feature}采用了{description}设计，适合{suitableFor}。",
+        "产品{feature}的详细参数是{description}，建议您{recommendation}。"
+      ],
+      "variables": ["feature", "description", "usage", "suitableFor", "recommendation"]
+    },
+    {
+      "intent": "库存查询",
+      "templates": [
+        "该商品目前{stockStatus}，{availableInfo}。",
+        "您好，这款产品{stockStatus}，{availableInfo}。",
+        "目前该款{stockStatus}，{availableInfo}，建议您尽快下单。",
+        "该商品{stockStatus}，{availableInfo}，如需购买请尽快。"
+      ],
+      "variables": ["stockStatus", "availableInfo"]
+    },
+    {
+      "intent": "下单问题",
+      "templates": [
+        "购买流程很简单：选择商品→加入购物车→提交订单→选择支付方式→完成支付。",
+        "您可以直接在商品页面点击"立即购买"，然后填写收货信息，最后完成支付即可。",
+        "下单步骤：选择商品规格→点击购买→填写收货地址→选择支付方式→提交订单。",
+        "您可以通过APP或网页下单，选好商品后点击购买，填写地址信息并完成支付即可。"
+      ]
+    },
+    {
+      "intent": "感谢",
+      "templates": [
+        "不客气，这是我应该做的，如有其他问题随时咨询。",
+        "很高兴能帮到您，祝您购物愉快！",
+        "您的满意是我们最大的动力，欢迎再次光临。",
+        "为您服务是我的荣幸，希望您有愉快的购物体验。"
+      ]
+    },
+    {
+      "intent": "告别",
+      "templates": [
+        "再见，祝您生活愉快！有问题随时来咨询。",
+        "感谢您的咨询，再见，期待下次为您服务！",
+        "再见，欢迎您随时回来咨询，祝您一切顺利！",
+        "再见，有任何问题都可以随时联系我们的客服。"
+      ]
+    },
+    {
+      "intent": "default",
+      "templates": [
+        "感谢您的咨询，请问您具体是想了解什么呢？",
+        "抱歉，我可能没有理解您的意思，能否更详细地描述一下您的问题？",
+        "您好，请问您是想咨询哪方面的问题呢？",
+        "很抱歉没能理解您的需求，请提供更多信息，我们会尽力帮助您解决问题。"
+      ]
+    }
+  ]
+} 
