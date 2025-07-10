@@ -27,15 +27,6 @@ class IntentClassifier {
       const intentsData = fs.readFileSync(intentsPath, 'utf8');
       this.intents = JSON.parse(intentsData).intents || [];
       console.log(`意图数据加载成功，共${this.intents.length}种意图`);
-      
-      // 为每个意图模式添加到TF-IDF
-      if (this.tfidf) {
-        this.intents.forEach(intent => {
-          intent.patterns.forEach((pattern, index) => {
-            this.tfidf.addDocument(pattern, `${intent.name}_${index}`);
-          });
-        });
-      }
     } catch (error) {
       console.error('加载意图数据失败:', error);
       this.intents = [];
@@ -47,7 +38,7 @@ class IntentClassifier {
    */
   initializeClassifier() {
     try {
-      // 使用朴素贝叶斯分类器代替逻辑回归分类器
+      // 使用朴素贝叶斯分类器
       this.classifier = new natural.BayesClassifier();
       
       // 为分类器添加训练数据
@@ -61,6 +52,15 @@ class IntentClassifier {
         // 训练分类器
         this.classifier.train();
         console.log('意图分类器训练完成');
+      }
+      
+      // 初始化TF-IDF
+      if (this.intents && this.intents.length > 0) {
+        this.intents.forEach(intent => {
+          intent.patterns.forEach((pattern, index) => {
+            this.tfidf.addDocument(pattern);
+          });
+        });
       }
     } catch (error) {
       console.error('初始化分类器失败:', error);
@@ -83,11 +83,23 @@ class IntentClassifier {
 
     const content = parsedMessage.cleanContent;
     
-    // 使用两种方法识别意图
+    // 首先使用模式匹配识别意图（更精确）
     const patternResult = this.classifyByPatterns(content);
-    let classifierResult = [];
     
-    // 只有当分类器正确初始化时才使用
+    // 如果模式匹配有高置信度结果，直接返回
+    const highConfidencePattern = patternResult.find(r => r.confidence > 0.7);
+    if (highConfidencePattern) {
+      return [highConfidencePattern];
+    }
+    
+    // 使用关键词匹配增强识别
+    let keywordResults = [];
+    if (parsedMessage.keywords && parsedMessage.keywords.length > 0) {
+      keywordResults = this.classifyByKeywords(parsedMessage.keywords);
+    }
+    
+    // 使用分类器进行识别
+    let classifierResult = [];
     if (this.classifier) {
       try {
         classifierResult = this.classifyByClassifier(content);
@@ -97,10 +109,47 @@ class IntentClassifier {
     }
     
     // 合并结果并按置信度排序
-    const results = [...patternResult, ...classifierResult];
+    const results = [...patternResult, ...keywordResults, ...classifierResult];
     const uniqueResults = this.deduplicateResults(results);
     
     return uniqueResults.sort((a, b) => b.confidence - a.confidence);
+  }
+  
+  /**
+   * 根据关键词匹配意图
+   * @param {Array} keywords 关键词数组
+   * @returns {Array} 匹配的意图数组
+   */
+  classifyByKeywords(keywords) {
+    const results = [];
+    
+    if (!this.intents || !keywords || keywords.length === 0) return results;
+    
+    this.intents.forEach(intent => {
+      let matchCount = 0;
+      let totalKeywords = keywords.length;
+      
+      // 检查每个模式是否包含关键词
+      intent.patterns.forEach(pattern => {
+        keywords.forEach(keyword => {
+          if (pattern.includes(keyword)) {
+            matchCount++;
+          }
+        });
+      });
+      
+      // 计算匹配分数
+      if (matchCount > 0) {
+        const score = matchCount / totalKeywords;
+        results.push({
+          intent: intent.name,
+          confidence: score * (intent.confidence || 0.7),
+          method: 'keyword'
+        });
+      }
+    });
+    
+    return results;
   }
   
   /**
@@ -156,25 +205,60 @@ class IntentClassifier {
     
     try {
       // 获取分类结果
-      let classification;
+      let classifications;
       
       try {
-        classification = this.classifier.getClassifications(content);
+        classifications = this.classifier.getClassifications(content);
       } catch (error) {
         console.error('分类器获取分类失败:', error);
         return [];
       }
       
-      // 转换为标准格式
-      return classification
+      // 转换为标准格式，调整置信度
+      const results = classifications
         .filter(result => result.value > 0.1) // 过滤低置信度结果
         .map(result => ({
           intent: result.label,
-          confidence: result.value,
+          confidence: Math.min(result.value * 0.7, 0.7), // 降低分类器置信度，避免它总是主导结果
           method: 'classifier'
         }));
+      
+      // 如果没有任何结果，尝试使用TF-IDF进行匹配
+      if (results.length === 0) {
+        return this.classifyByTfIdf(content);
+      }
+      
+      return results;
     } catch (error) {
       console.error('分类器识别意图出错:', error);
+      return [];
+    }
+  }
+  
+  /**
+   * 使用TF-IDF进行意图匹配
+   * @param {string} content 消息内容
+   * @returns {Array} 匹配结果数组
+   */
+  classifyByTfIdf(content) {
+    try {
+      const results = [];
+      
+      // 计算内容与各个意图模式的相似度
+      this.tfidf.tfidfs(content, (i, measure) => {
+        if (measure > 0 && i < this.intents.length) {
+          const intent = this.intents[i];
+          results.push({
+            intent: intent.name,
+            confidence: Math.min(measure / 10, 0.6), // 归一化置信度，降低TF-IDF的权重
+            method: 'tfidf'
+          });
+        }
+      });
+      
+      return results;
+    } catch (error) {
+      console.error('TF-IDF匹配失败:', error);
       return [];
     }
   }

@@ -5,9 +5,10 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "test-client": "node src/utils/wsClient.js",
+    "test": "jest",
     "test-ws": "node src/tests/websocketService.test.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test-mp": "node src/tests/messageProcessor.test.js",
+    "test-bl": "node src/tests/businessLogic.test.js"
   },
   "keywords": [
     "qianniu",
@@ -26,6 +27,7 @@
     "ws": "^8.13.0"
   },
   "devDependencies": {
+    "jest": "^29.7.0",
     "nodemon": "^3.0.1"
   }
 }

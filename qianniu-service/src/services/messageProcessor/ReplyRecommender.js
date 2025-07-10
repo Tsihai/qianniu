@@ -22,6 +22,25 @@ class ReplyRecommender {
     
     // 加载回复模板数据
     this.loadReplyTemplates();
+    
+    // 产品信息示例（实际应用中可从数据库获取）
+    this.productInfo = {
+      price: '199',
+      shipDate: '2023-07-15',
+      arrivalDate: '2023-07-18',
+      trackingNumber: 'SF1234567890',
+      status: '运输中',
+      days: '3',
+      location: '上海转运中心',
+      company: '顺丰快递',
+      feature: '材质',
+      description: '优质环保材料',
+      usage: '建议轻柔清洗',
+      suitableFor: '所有年龄段',
+      recommendation: '日常使用即可',
+      stockStatus: '有现货',
+      availableInfo: '库存充足'
+    };
   }
 
   /**
@@ -108,8 +127,9 @@ class ReplyRecommender {
     
     // 如果没有找到对应的模板组，使用默认回复
     if (!templateGroup) {
+      const defaultTemplates = this.getDefaultTemplates();
       return {
-        text: '抱歉，我无法回答这个问题。',
+        text: this.selectRandomTemplate(defaultTemplates.templates),
         confidence: 0.3,
         intent: intentResult.intent
       };
@@ -118,9 +138,20 @@ class ReplyRecommender {
     // 随机选择一个模板
     let template = this.selectRandomTemplate(templateGroup.templates);
     
+    // 合并上下文和产品信息
+    const mergedContext = { ...this.productInfo, ...context };
+    
+    // 提取消息中的关键信息
+    if (parsedMessage && parsedMessage.keywords) {
+      parsedMessage.keywords.forEach(keyword => {
+        // 根据关键词增强上下文
+        this.enhanceContextWithKeyword(mergedContext, keyword, intentResult.intent);
+      });
+    }
+    
     // 替换模板中的变量
     if (templateGroup.variables && templateGroup.variables.length > 0) {
-      template = this.fillTemplateVariables(template, templateGroup.variables, context);
+      template = this.fillTemplateVariables(template, templateGroup.variables, mergedContext);
     }
     
     return {
@@ -129,6 +160,43 @@ class ReplyRecommender {
       intent: intentResult.intent,
       isTemplate: true
     };
+  }
+  
+  /**
+   * 根据关键词增强上下文
+   * @param {Object} context 上下文对象
+   * @param {string} keyword 关键词
+   * @param {string} intent 意图
+   */
+  enhanceContextWithKeyword(context, keyword, intent) {
+    // 根据不同意图和关键词设置特定上下文
+    switch (intent) {
+      case '询问价格':
+        if (keyword.includes('优惠') || keyword.includes('促销')) {
+          context.price = '159';
+          context.discount = '8折优惠';
+        }
+        break;
+        
+      case '查询物流':
+        if (keyword.includes('快递')) {
+          context.company = '顺丰快递';
+        } else if (keyword.includes('到货')) {
+          context.arrivalDate = '明天';
+          context.days = '1';
+        }
+        break;
+        
+      case '库存查询':
+        if (keyword.includes('缺货') || keyword.includes('断货')) {
+          context.stockStatus = '暂时缺货';
+          context.availableInfo = '预计三天后到货';
+        }
+        break;
+        
+      default:
+        break;
+    }
   }
   
   /**
