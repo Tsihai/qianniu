@@ -1,152 +1,207 @@
 /**
- * 千牛客服自动化服务 - 主入口文件
- * 用于启动WebSocket服务和RESTful API服务
+ * 千牛客服自动化系统主入口
  */
+const WebSocket = require('ws');
+const path = require('path');
 const express = require('express');
-const cors = require('cors');
-const WebSocketService = require('./services/websocketService');
-const config = require('./config');
+const WebSocketService = require('./services/WebSocketService');
+const MessageProcessor = require('./services/messageProcessor');
+const BusinessLogicProcessor = require('./services/businessLogic');
 
-// 创建Express应用
+// 初始化配置
+const PORT = process.env.PORT || 3000;
+const WS_PORT = process.env.WS_PORT || 8080;
+
+// 初始化Express应用
 const app = express();
-
-// 启用中间件
-app.use(cors());
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.static(path.join(__dirname, 'public')));
 
-// 创建WebSocket服务实例
+// 初始化消息处理器
+const messageProcessor = new MessageProcessor({
+  dataPath: path.join(__dirname, 'services/messageProcessor/data'),
+  enableLogging: true
+});
+
+// 初始化业务逻辑处理器
+const businessLogic = new BusinessLogicProcessor({
+  dataPath: path.join(__dirname, 'services/businessLogic/data'),
+  enableLogging: true,
+  autoReplyEnabled: true
+});
+
+// 初始化WebSocket服务
 const wsService = new WebSocketService({
-  port: config.wsPort || 8080,
-  path: '/ws',
-  heartbeatInterval: 30000,
-  enableProcessing: true,
-  autoReply: false, // 初始不启用自动回复
-  processorOptions: {
-    enableLogging: true
+  port: WS_PORT,
+  pingInterval: 30000,
+  autoReconnect: true
+});
+
+// 设置WebSocket消息处理
+wsService.on('message', async (message, clientId) => {
+  try {
+    console.log(`收到消息 [${clientId}]: ${message.slice(0, 100)}...`);
+    
+    // 处理消息
+    const processedResult = await messageProcessor.process(message, { clientId });
+    
+    // 应用业务逻辑
+    const businessResult = businessLogic.process(processedResult);
+    
+    console.log(`处理结果 [${clientId}]:`, {
+      intent: processedResult.bestIntent?.intent,
+      confidence: processedResult.bestIntent?.confidence,
+      autoReply: businessResult.autoReply?.message?.slice(0, 100)
+    });
+    
+    // 如果配置为自动回复，且有回复内容，则发送
+    if (
+      businessResult.autoReply && 
+      businessResult.autoReply.success && 
+      businessResult.autoReply.shouldAutoSend
+    ) {
+      wsService.sendMessage({
+        type: 'auto_reply',
+        content: businessResult.autoReply.message,
+        timestamp: Date.now(),
+        clientId
+      }, clientId);
+    }
+    
+    // 发送处理结果通知给管理界面
+    wsService.broadcast({
+      type: 'message_processed',
+      clientId,
+      timestamp: Date.now(),
+      result: {
+        intent: processedResult.bestIntent?.intent,
+        confidence: processedResult.bestIntent?.confidence,
+        keywords: processedResult.parsedMessage?.keywords,
+        suggestedReply: businessResult.autoReply?.message || null,
+        statistics: businessResult.statistics,
+        customerInfo: businessResult.behavior?.customerInfo
+      }
+    }, [clientId]); // 排除发送消息的客户端
+  } catch (error) {
+    console.error(`处理消息出错 [${clientId}]:`, error);
+    wsService.sendMessage({
+      type: 'error',
+      content: '消息处理失败，请稍后重试',
+      timestamp: Date.now(),
+      error: error.message
+    }, clientId);
   }
 });
 
-// 启动WebSocket服务
-wsService.start();
-
-// 设置API路由
-// 状态接口
-app.get('/api/status', (req, res) => {
-  res.json({
-    status: 'running',
-    clients: wsService.getClientCount(),
-    uptime: process.uptime()
-  });
+// 监听连接事件
+wsService.on('connection', (clientId) => {
+  console.log(`客户端连接 [${clientId}]`);
+  wsService.sendMessage({
+    type: 'welcome',
+    content: '欢迎连接千牛客服自动化系统',
+    timestamp: Date.now(),
+    clientId
+  }, clientId);
 });
 
-// 客户端列表接口
-app.get('/api/clients', (req, res) => {
-  res.json({
-    count: wsService.getClientCount(),
-    clients: wsService.getClientList()
-  });
+// 监听断开连接事件
+wsService.on('disconnect', (clientId) => {
+  console.log(`客户端断开连接 [${clientId}]`);
+  // 清理相关资源
 });
 
-// 发送消息接口
-app.post('/api/message', (req, res) => {
-  const { clientId, message } = req.body;
+// API路由定义
+
+// 获取消息统计数据
+app.get('/api/statistics', (req, res) => {
+  const type = req.query.type || 'global';
+  const stats = businessLogic.strategies.statistics.getStatistics(type);
+  res.json({ success: true, statistics: stats });
+});
+
+// 获取会话列表
+app.get('/api/sessions', (req, res) => {
+  const sessions = businessLogic.getAllSessions();
+  res.json({ success: true, sessions });
+});
+
+// 获取会话详情
+app.get('/api/sessions/:sessionId', (req, res) => {
+  const { sessionId } = req.params;
+  const session = businessLogic.getSessionDetail(sessionId);
   
-  if (!clientId || !message) {
-    return res.status(400).json({ error: '缺少clientId或message参数' });
+  if (!session) {
+    return res.status(404).json({ success: false, message: '会话不存在' });
   }
   
-  const success = wsService.sendTo(clientId, message);
-  
-  res.json({
-    success,
-    timestamp: Date.now()
-  });
+  res.json({ success: true, session });
 });
 
-// 广播消息接口
-app.post('/api/broadcast', (req, res) => {
-  const { message, exclude } = req.body;
+// 设置自动回复状态
+app.post('/api/settings/auto-reply', (req, res) => {
+  const { enabled } = req.body;
   
-  if (!message) {
-    return res.status(400).json({ error: '缺少message参数' });
+  if (typeof enabled !== 'boolean') {
+    return res.status(400).json({ success: false, message: '参数错误' });
   }
   
-  const count = wsService.broadcast(message, exclude || []);
-  
-  res.json({
-    success: true,
-    recipients: count,
-    timestamp: Date.now()
-  });
+  const result = businessLogic.setAutoReplyEnabled(enabled);
+  res.json({ success: true, autoReplyEnabled: result });
 });
 
-// 消息处理测试接口
-app.post('/api/process-message', (req, res) => {
-  const { message } = req.body;
+// 添加自定义回复规则
+app.post('/api/reply-rules', (req, res) => {
+  const { intent, pattern, reply } = req.body;
   
-  if (!message) {
-    return res.status(400).json({ error: '缺少message参数' });
+  if (!intent || !pattern || !reply) {
+    return res.status(400).json({ success: false, message: '参数不完整' });
   }
   
   try {
-    const processor = wsService.getMessageProcessor();
-    
-    if (!processor) {
-      return res.status(500).json({ error: '消息处理器未启用' });
-    }
-    
-    const result = processor.processMessage(message);
-    res.json(result);
+    const result = businessLogic.strategies.autoReply.addRule(intent, pattern, reply);
+    res.json({ success: result });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// 获取/设置自动回复状态接口
-app.route('/api/auto-reply')
-  .get((req, res) => {
-    res.json({ enabled: wsService.options.autoReply });
-  })
-  .post((req, res) => {
-    const { enabled } = req.body;
-    
-    if (typeof enabled !== 'boolean') {
-      return res.status(400).json({ error: '参数错误，enabled必须是布尔值' });
-    }
-    
-    wsService.options.autoReply = enabled;
-    res.json({ success: true, enabled });
-  });
+// 设置回复模式
+app.post('/api/settings/reply-mode', (req, res) => {
+  const { mode } = req.body;
+  
+  if (!['auto', 'suggest', 'hybrid'].includes(mode)) {
+    return res.status(400).json({ success: false, message: '无效的模式' });
+  }
+  
+  const result = businessLogic.strategies.autoReply.setReplyMode(mode);
+  res.json({ success: result, mode });
+});
 
-// 监听WebSocket事件
-wsService.on('message_processed', (result) => {
-  console.log(`消息处理完成: ${result.parsedMessage.cleanContent}`);
-  // 这里可以添加其他处理逻辑
+// 清理过期会话
+app.post('/api/sessions/cleanup', (req, res) => {
+  const { maxAge } = req.body;
+  const ageInMs = maxAge ? parseInt(maxAge) * 1000 : 7200000; // 默认2小时
+  
+  const count = businessLogic.cleanupSessions(ageInMs);
+  res.json({ success: true, cleanedCount: count });
 });
 
 // 启动HTTP服务器
-const server = app.listen(config.httpPort, () => {
-  console.log(`REST API服务已启动，端口: ${config.httpPort}`);
-  console.log(`WebSocket服务已启动，端口: ${config.wsPort}`);
-  console.log('服务就绪，等待客户端连接...');
+app.listen(PORT, () => {
+  console.log(`HTTP服务器运行在端口 ${PORT}`);
 });
 
-// 处理进程退出
-process.on('SIGTERM', () => {
-  console.log('收到SIGTERM信号，关闭服务...');
-  server.close(() => {
-    wsService.stop();
-    console.log('服务已安全关闭');
-    process.exit(0);
-  });
-});
+// 启动WebSocket服务器
+wsService.start();
 
+// 进程退出处理
 process.on('SIGINT', () => {
-  console.log('收到SIGINT信号，关闭服务...');
-  server.close(() => {
-    wsService.stop();
-    console.log('服务已安全关闭');
-    process.exit(0);
-  });
+  console.log('正在关闭服务...');
+  wsService.stop();
+  
+  // 保存数据
+  businessLogic.strategies.statistics.dispose();
+  businessLogic.strategies.customerBehavior.dispose();
+  
+  process.exit(0);
 }); 
