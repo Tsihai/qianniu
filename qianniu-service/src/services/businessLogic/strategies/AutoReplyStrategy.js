@@ -2,11 +2,27 @@
  * 自动回复策略处理器
  * 负责根据消息意图和内容生成适当的自动回复
  */
-const fs = require('fs');
-const path = require('path');
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 class AutoReplyStrategy {
   constructor(options = {}) {
+    // 集成统一工具类
+    this.logger = options.logger || console;
+    this.errorHandler = options.errorHandler;
+    this.performanceMonitor = options.performanceMonitor;
+    this.sessionManager = options.sessionManager;
+    
+    // 数据服务依赖注入
+    this.dataService = options.dataService;
+    if (!this.dataService) {
+      throw new Error('AutoReplyStrategy requires dataService dependency');
+    }
+    
     // 配置选项
     this.options = {
       confidenceThreshold: options?.confidenceThreshold || 0.6,
@@ -16,31 +32,73 @@ class AutoReplyStrategy {
       ...options
     };
     
-    // 自定义规则集
-    this.rules = this.loadRules();
+    // 自定义规则集 - 初始化为空数组，需要显式调用loadRules()进行异步加载
+    this.rules = [];
     
     // 回复模式：'auto' - 完全自动, 'suggest' - 仅建议, 'hybrid' - 混合模式
     this.replyMode = options?.replyMode || 'suggest';
     
-    console.log('自动回复策略处理器初始化完成');
+    this.logger.info('自动回复策略处理器初始化完成', {
+      confidenceThreshold: this.options.confidenceThreshold,
+      maxRepliesPerIntent: this.options.maxRepliesPerIntent,
+      replyMode: this.replyMode,
+      rulesCount: this.rules.length,
+      note: '规则需要通过loadRules()方法异步加载'
+    });
   }
   
   /**
    * 加载自定义回复规则
    * @returns {Array} 规则列表
    */
-  loadRules() {
+  async loadRules() {
+    const timer = this.performanceMonitor?.startTimer('auto_reply_load_rules');
+    
     try {
-      if (fs.existsSync(this.options.customRulesPath)) {
-        const rulesData = fs.readFileSync(this.options.customRulesPath, 'utf8');
-        return JSON.parse(rulesData);
-      }
+      // 从数据服务获取自动回复规则（使用IntentTemplate存储）
+      const autoReplyTemplates = await this.dataService.getAllIntentTemplates();
+      
+      // 过滤出自动回复类型的模板
+      const autoReplyRules = autoReplyTemplates
+        .filter(template => template.category === 'auto_reply')
+        .map(template => ({
+          intent: template.name,
+          rules: template.patterns?.map(pattern => ({
+            pattern: pattern,
+            reply: template.responses?.[0] || '感谢您的咨询，我们会尽快回复您。'
+          })) || [],
+          defaultReply: template.defaultReply || template.responses?.[0] || '感谢您的咨询，我们会尽快回复您。'
+        }));
+      
+      // 更新实例的规则集
+      this.rules = autoReplyRules;
+      
+      this.logger.info('自动回复规则加载成功', {
+        rulesCount: autoReplyRules.length,
+        source: 'dataService'
+      });
+      
+      timer?.end({ success: true, rulesCount: autoReplyRules.length });
+      return autoReplyRules;
+      
     } catch (error) {
-      console.error('加载自动回复规则失败:', error);
+      const errorInfo = {
+        message: '加载自动回复规则失败',
+        error: error.message,
+        source: 'dataService'
+      };
+      
+      if (this.errorHandler) {
+        this.errorHandler.handleError(error, 'AutoReplyStrategy.loadRules', errorInfo);
+      } else {
+        this.logger.error('加载自动回复规则失败', errorInfo);
+      }
+      
+      timer?.end({ success: false, error: error.message });
     }
     
     // 返回默认规则
-    return [
+    const defaultRules = [
       {
         intent: 'greeting',
         rules: [
@@ -61,29 +119,73 @@ class AutoReplyStrategy {
         ]
       }
     ];
+    
+    // 更新实例的规则集
+    this.rules = defaultRules;
+    
+    this.logger.info('使用默认回复规则', { rulesCount: defaultRules.length });
+    timer?.end({ success: true, rulesCount: defaultRules.length, isDefault: true });
+    
+    return defaultRules;
   }
   
   /**
    * 保存自定义回复规则
    * @param {Array} rules 规则列表
    */
-  saveRules(rules) {
+  async saveRules(rules) {
+    const timer = this.performanceMonitor?.startTimer('auto_reply_save_rules');
+    
     try {
-      const dir = path.dirname(this.options.customRulesPath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
+      // 将自定义规则保存为IntentTemplate
+      let savedCount = 0;
+      
+      for (const rule of rules) {
+        const templateData = {
+          name: rule.intent || `auto_reply_${Date.now()}_${savedCount}`,
+          category: 'auto_reply',
+          keywords: rule.keywords || [],
+          patterns: rule.rules?.map(r => r.pattern) || [],
+          responses: rule.rules?.map(r => r.reply) || [rule.defaultReply],
+          priority: rule.priority || 0,
+          isActive: rule.isActive !== false,
+          description: `自动回复规则: ${rule.intent || 'custom'}`
+        };
+        
+        // 检查是否已存在
+        const existing = await this.dataService.getIntentTemplate(templateData.name);
+        if (existing) {
+          await this.dataService.updateIntentTemplate(templateData.name, templateData);
+        } else {
+          await this.dataService.createIntentTemplate(templateData);
+        }
+        
+        savedCount++;
       }
       
-      fs.writeFileSync(
-        this.options.customRulesPath, 
-        JSON.stringify(rules, null, 2), 
-        'utf8'
-      );
-      
       this.rules = rules;
+      
+      this.logger.info('自动回复规则保存成功', {
+        rulesCount: savedCount,
+        source: 'dataService'
+      });
+      
+      timer?.end({ success: true, rulesCount: savedCount });
       return true;
     } catch (error) {
-      console.error('保存自动回复规则失败:', error);
+      const errorInfo = {
+        message: '保存自动回复规则失败',
+        error: error.message,
+        rulesCount: rules?.length
+      };
+      
+      if (this.errorHandler) {
+        this.errorHandler.handleError(error, 'AutoReplyStrategy.saveRules', errorInfo);
+      } else {
+        this.logger.error('保存自动回复规则失败', errorInfo);
+      }
+      
+      timer?.end({ success: false, error: error.message });
       return false;
     }
   }
@@ -95,53 +197,114 @@ class AutoReplyStrategy {
    * @returns {Object} 处理结果
    */
   process(processedResult, sessionContext) {
-    if (!processedResult || !processedResult.parsedMessage) {
-      return { success: false, reason: '无效的消息处理结果' };
-    }
+    const timer = this.performanceMonitor?.startTimer('auto_reply_process');
     
-    const content = processedResult.parsedMessage.cleanContent;
-    const intents = processedResult.intents || [];
-    
-    // 如果没有识别出意图，或置信度低于阈值，则使用默认回复
-    if (intents.length === 0 || intents[0].confidence < this.options.confidenceThreshold) {
-      return this.generateDefaultReply(content, sessionContext);
-    }
-    
-    // 尝试为每个意图生成回复
-    const replies = [];
-    
-    for (let i = 0; i < Math.min(intents.length, this.options.maxRepliesPerIntent); i++) {
-      const intent = intents[i];
-      const reply = this.generateReplyByIntent(intent.intent, content, sessionContext);
-      
-      if (reply) {
-        replies.push({
-          message: reply,
-          confidence: intent.confidence,
-          intent: intent.intent,
-          isAutomatic: true
-        });
+    try {
+      if (!processedResult || !processedResult.parsedMessage) {
+        const error = new Error('无效的消息处理结果');
+        
+        if (this.errorHandler) {
+          this.errorHandler.handleError(error, 'AutoReplyStrategy.process', {
+            processedResult: !!processedResult,
+            parsedMessage: !!processedResult?.parsedMessage
+          });
+        } else {
+          this.logger.error('处理消息失败', { reason: '无效的消息处理结果' });
+        }
+        
+        timer?.end({ success: false, error: error.message });
+        return { success: false, reason: '无效的消息处理结果' };
       }
+      
+      const content = processedResult.parsedMessage.cleanContent;
+      const intents = processedResult.intents || [];
+      
+      this.logger.debug('开始处理自动回复', {
+        contentLength: content?.length,
+        intentsCount: intents.length,
+        topIntent: intents[0]?.intent,
+        topConfidence: intents[0]?.confidence
+      });
+      
+      // 如果没有识别出意图，或置信度低于阈值，则使用默认回复
+      if (intents.length === 0 || intents[0].confidence < this.options.confidenceThreshold) {
+        this.logger.debug('使用默认回复', {
+          reason: intents.length === 0 ? '无意图识别' : '置信度过低',
+          confidence: intents[0]?.confidence,
+          threshold: this.options.confidenceThreshold
+        });
+        
+        const result = this.generateDefaultReply(content, sessionContext);
+        timer?.end({ success: true, replyType: 'default' });
+        return result;
+      }
+      
+      // 尝试为每个意图生成回复
+      const replies = [];
+      
+      for (let i = 0; i < Math.min(intents.length, this.options.maxRepliesPerIntent); i++) {
+        const intent = intents[i];
+        const reply = this.generateReplyByIntent(intent.intent, content, sessionContext);
+        
+        if (reply) {
+          replies.push({
+            message: reply,
+            confidence: intent.confidence,
+            intent: intent.intent,
+            isAutomatic: true
+          });
+        }
+      }
+      
+      // 如果没有生成任何回复，使用默认回复
+      if (replies.length === 0) {
+        this.logger.debug('未生成意图回复，使用默认回复');
+        const result = this.generateDefaultReply(content, sessionContext);
+        timer?.end({ success: true, replyType: 'default_fallback' });
+        return result;
+      }
+      
+      // 根据回复模式处理
+      const bestReply = replies[0];
+      
+      this.logger.info('自动回复生成成功', {
+        intent: bestReply.intent,
+        confidence: bestReply.confidence,
+        mode: this.replyMode,
+        alternativesCount: replies.length - 1
+      });
+      
+      const result = {
+        success: true,
+        mode: this.replyMode,
+        message: bestReply.message,
+        confidence: bestReply.confidence,
+        intent: bestReply.intent,
+        alternatives: replies.slice(1),
+        shouldAutoSend: this.replyMode === 'auto',
+        timestamp: Date.now()
+      };
+      
+      timer?.end({ success: true, replyType: 'intent_based', intent: bestReply.intent });
+      return result;
+      
+    } catch (error) {
+      const errorInfo = {
+        message: '自动回复处理异常',
+        error: error.message,
+        processedResult: !!processedResult,
+        sessionContext: !!sessionContext
+      };
+      
+      if (this.errorHandler) {
+        this.errorHandler.handleError(error, 'AutoReplyStrategy.process', errorInfo);
+      } else {
+        this.logger.error('自动回复处理异常', errorInfo);
+      }
+      
+      timer?.end({ success: false, error: error.message });
+      return { success: false, reason: '处理异常', error: error.message };
     }
-    
-    // 如果没有生成任何回复，使用默认回复
-    if (replies.length === 0) {
-      return this.generateDefaultReply(content, sessionContext);
-    }
-    
-    // 根据回复模式处理
-    const bestReply = replies[0];
-    
-    return {
-      success: true,
-      mode: this.replyMode,
-      message: bestReply.message,
-      confidence: bestReply.confidence,
-      intent: bestReply.intent,
-      alternatives: replies.slice(1),
-      shouldAutoSend: this.replyMode === 'auto',
-      timestamp: Date.now()
-    };
   }
   
   /**
@@ -168,7 +331,18 @@ class AutoReplyStrategy {
           return this.replaceTemplateVariables(rule.reply, context);
         }
       } catch (error) {
-        console.error(`规则正则表达式错误 [${rule.pattern}]:`, error);
+        const errorInfo = {
+          message: '规则正则表达式错误',
+          pattern: rule.pattern,
+          error: error.message,
+          intent
+        };
+        
+        if (this.errorHandler) {
+          this.errorHandler.handleError(error, 'AutoReplyStrategy.generateReplyByIntent', errorInfo);
+        } else {
+          this.logger.error('规则正则表达式错误', errorInfo);
+        }
       }
     }
     
@@ -246,7 +420,9 @@ class AutoReplyStrategy {
    * @param {string} reply 回复内容
    * @returns {boolean} 是否添加成功
    */
-  addRule(intent, pattern, reply) {
+  async addRule(intent, pattern, reply) {
+    const timer = this.performanceMonitor?.startTimer('auto_reply_add_rule');
+    
     try {
       // 验证正则表达式
       new RegExp(pattern);
@@ -261,15 +437,37 @@ class AutoReplyStrategy {
           rules: []
         };
         this.rules.push(intentRules);
+        this.logger.debug('创建新意图规则', { intent });
       }
       
       // 添加新规则
       intentRules.rules.push({ pattern, reply });
       
+      this.logger.info('添加自动回复规则', {
+        intent,
+        pattern,
+        replyLength: reply?.length
+      });
+      
       // 保存规则
-      return this.saveRules(this.rules);
+      const success = await this.saveRules(this.rules);
+      timer?.end({ success, intent, rulesCount: this.rules.length });
+      return success;
     } catch (error) {
-      console.error('添加规则失败:', error);
+      const errorInfo = {
+        message: '添加规则失败',
+        intent,
+        pattern,
+        error: error.message
+      };
+      
+      if (this.errorHandler) {
+        this.errorHandler.handleError(error, 'AutoReplyStrategy.addRule', errorInfo);
+      } else {
+        this.logger.error('添加规则失败', errorInfo);
+      }
+      
+      timer?.end({ success: false, error: error.message });
       return false;
     }
   }
@@ -287,4 +485,4 @@ class AutoReplyStrategy {
   }
 }
 
-module.exports = AutoReplyStrategy; 
+export default AutoReplyStrategy;

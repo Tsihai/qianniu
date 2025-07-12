@@ -2,11 +2,26 @@
  * 统计分析策略处理器
  * 负责对消息和会话进行统计和分析
  */
-const fs = require('fs');
-const path = require('path');
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 class StatisticsStrategy {
   constructor(options = {}) {
+    // 集成统一工具类
+    this.logger = options.logger || console;
+    this.errorHandler = options.errorHandler;
+    this.performanceMonitor = options.performanceMonitor;
+    this.sessionManager = options.sessionManager;
+    
+    // 数据服务依赖注入
+    this.dataService = options.dataService;
+    if (!this.dataService) {
+      throw new Error('StatisticsStrategy requires dataService dependency');
+    }
+    
     // 配置选项
     this.options = {
       saveInterval: options?.saveInterval || 3600000, // 1小时保存一次
@@ -36,51 +51,114 @@ class StatisticsStrategy {
     // 设置定时保存
     if (this.options.saveInterval > 0) {
       this.saveIntervalId = setInterval(() => {
-        this.saveStatistics();
+        try {
+          this.saveStatistics();
+        } catch (error) {
+          this.logger.error('定时保存统计数据失败', {
+            error: error.message,
+            interval: this.options.saveInterval
+          });
+          
+          if (this.errorHandler) {
+            this.errorHandler.handle(error, { context: 'StatisticsStrategy.autoSave' });
+          }
+        }
       }, this.options.saveInterval);
     }
     
-    console.log('统计分析策略处理器初始化完成');
+    this.logger.info('统计分析策略处理器初始化完成', {
+      saveInterval: this.options.saveInterval,
+      dataPath: this.options.dataPath,
+      intentsToTrack: this.options.intentsToTrack.length
+    });
   }
   
   /**
    * 加载统计数据
    */
-  loadStatistics() {
+  async loadStatistics() {
+    const timer = this.performanceMonitor?.startTimer('statistics_load');
+    
     try {
-      if (fs.existsSync(this.options.dataPath)) {
-        const data = fs.readFileSync(this.options.dataPath, 'utf8');
-        const loadedStats = JSON.parse(data);
-        this.statistics = { ...this.statistics, ...loadedStats };
-        console.log('统计数据加载成功');
+      // 从数据服务获取统计数据
+      const statisticsData = await this.dataService.getStatistics();
+      
+      if (statisticsData && statisticsData.length > 0) {
+        // 使用最新的统计记录
+        const latestStats = statisticsData[0];
+        this.statistics = {
+          messageCount: latestStats.messageCount || 0,
+          sessionCount: latestStats.sessionCount || 0,
+          intentDistribution: latestStats.intentDistribution || {},
+          hourlyMessageCount: latestStats.hourlyMessageCount || Array(24).fill(0),
+          dailyMessageCount: latestStats.dailyMessageCount || {},
+          avgMessagesPerSession: latestStats.avgMessagesPerSession || 0,
+          topKeywords: latestStats.topKeywords || [],
+          lastUpdated: latestStats.lastUpdated || Date.now()
+        };
+        
+        this.logger.info('统计数据加载成功', {
+          source: 'dataService',
+          messageCount: this.statistics.messageCount,
+          sessionCount: this.statistics.sessionCount
+        });
+      } else {
+        this.logger.info('统计数据不存在，使用默认配置', {
+          source: 'dataService'
+        });
       }
     } catch (error) {
-      console.error('加载统计数据失败:', error);
+      const errorMsg = '加载统计数据失败';
+      this.logger.error(errorMsg, { error: error.message });
+      
+      if (this.errorHandler) {
+        this.errorHandler.handle(error, { context: 'StatisticsStrategy.loadStatistics' });
+      }
+    } finally {
+      timer?.end();
     }
   }
   
   /**
    * 保存统计数据
    */
-  saveStatistics() {
+  async saveStatistics() {
+    const timer = this.performanceMonitor?.startTimer('statistics_save');
+    
     try {
-      const dir = path.dirname(this.options.dataPath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
+      // 准备统计数据
+      const statisticsData = {
+        messageCount: this.statistics.messageCount,
+        sessionCount: this.statistics.sessionCount,
+        intentDistribution: this.statistics.intentDistribution,
+        hourlyMessageCount: this.statistics.hourlyMessageCount,
+        dailyMessageCount: this.statistics.dailyMessageCount,
+        avgMessagesPerSession: this.statistics.avgMessagesPerSession,
+        topKeywords: this.statistics.topKeywords,
+        lastUpdated: Date.now()
+      };
       
-      this.statistics.lastUpdated = Date.now();
-      fs.writeFileSync(
-        this.options.dataPath,
-        JSON.stringify(this.statistics, null, 2),
-        'utf8'
-      );
+      // 保存到数据服务
+      await this.dataService.saveStatistics(statisticsData);
       
-      console.log('统计数据保存成功');
+      this.logger.info('统计数据保存成功', {
+        source: 'dataService',
+        messageCount: this.statistics.messageCount,
+        sessionCount: this.statistics.sessionCount
+      });
+      
       return true;
     } catch (error) {
-      console.error('保存统计数据失败:', error);
+      const errorMsg = '保存统计数据失败';
+      this.logger.error(errorMsg, { error: error.message });
+      
+      if (this.errorHandler) {
+        this.errorHandler.handle(error, { context: 'StatisticsStrategy.saveStatistics' });
+      }
+      
       return false;
+    } finally {
+      timer?.end();
     }
   }
   
@@ -91,8 +169,13 @@ class StatisticsStrategy {
    * @returns {Object} 处理结果
    */
   process(processedResult, sessionContext) {
+    const timer = this.performanceMonitor?.startTimer('statistics_process');
+    
     if (!processedResult) {
-      return { error: '无效的消息处理结果' };
+      const error = new Error('无效的消息处理结果');
+      this.logger.error('统计处理失败：无效输入', { processedResult, sessionContext });
+      timer?.end();
+      return { error: error.message };
     }
     
     try {
@@ -102,6 +185,13 @@ class StatisticsStrategy {
       const intents = processedResult.intents || [];
       const bestIntent = intents.length > 0 ? intents[0].intent : 'unknown';
       const keywords = processedResult.parsedMessage?.keywords || [];
+      
+      this.logger.debug('开始处理统计数据', {
+        sessionId,
+        intent: bestIntent,
+        keywordsCount: keywords.length,
+        timestamp
+      });
       
       // 更新全局统计数据
       this.updateGlobalStatistics(bestIntent, timestamp, keywords);
@@ -119,10 +209,33 @@ class StatisticsStrategy {
         timestamp
       };
       
+      this.logger.debug('统计处理完成', {
+        messageCount: result.messageCount,
+        sessionCount: result.sessionCount,
+        intent: result.intent
+      });
+      
       return result;
     } catch (error) {
-      console.error('统计处理出错:', error);
+      const errorMsg = '统计处理出错';
+      this.logger.error(errorMsg, {
+        error: error.message,
+        stack: error.stack,
+        sessionId: sessionContext?.id,
+        processedResult: processedResult
+      });
+      
+      if (this.errorHandler) {
+        this.errorHandler.handle(error, {
+          context: 'StatisticsStrategy.process',
+          sessionContext,
+          processedResult
+        });
+      }
+      
       return { error: error.message };
+    } finally {
+      timer?.end();
     }
   }
   
@@ -334,11 +447,24 @@ class StatisticsStrategy {
    * 清理资源
    */
   dispose() {
+    this.logger.info('开始清理StatisticsStrategy资源');
+    
     if (this.saveIntervalId) {
       clearInterval(this.saveIntervalId);
+      this.logger.debug('已清理定时保存任务');
     }
-    this.saveStatistics();
+    
+    try {
+      this.saveStatistics();
+      this.logger.info('StatisticsStrategy资源清理完成');
+    } catch (error) {
+      this.logger.error('清理时保存统计数据失败', { error: error.message });
+      
+      if (this.errorHandler) {
+        this.errorHandler.handle(error, { context: 'StatisticsStrategy.dispose' });
+      }
+    }
   }
 }
 
-module.exports = StatisticsStrategy; 
+export default StatisticsStrategy;

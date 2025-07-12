@@ -1,0 +1,108 @@
+{
+  "app": {
+    "debug": true
+  },
+  "server": {
+    "port": 3000
+  },
+  "websocket": {
+    "port": 8080,
+    "maxConnections": 100
+  },
+  "database": {
+    "mongodb": {
+      "uri": "mongodb://localhost:27017/qianniu_dev",
+      "options": {
+        "maxPoolSize": 5
+      }
+    },
+    "mockMode": true,
+    "enablePersistence": false
+  },
+  "logging": {
+    "level": "debug",
+    "enableConsole": true,
+    "enableFile": true,
+    "file": {
+      "path": "./logs/dev",
+      "filename": "dev.log"
+    },
+    "modules": {
+      "websocket": "debug",
+      "database": "debug",
+      "business": "debug",
+      "performance": "debug"
+    }
+  },
+  "performance": {
+    "monitoring": {
+      "enabled": true,
+      "bufferSize": 500,
+      "collectInterval": 10000
+    },
+    "systemMetrics": {
+      "enabled": true,
+      "cpuThreshold": 70,
+      "memoryThreshold": 75
+    },
+    "alerts": {
+      "enabled": false
+    }
+  },
+  "business": {
+    "intent": {
+      "confidence": {
+        "threshold": 0.5,
+        "fallback": 0.2
+      }
+    },
+    "session": {
+      "timeout": 600000,
+      "maxSessions": 100
+    },
+    "message": {
+      "rateLimiting": {
+        "enabled": false
+      }
+    }
+  },
+  "security": {
+    "cors": {
+      "origins": ["http://localhost:3000", "http://localhost:3001", "http://127.0.0.1:3000"]
+    },
+    "rateLimit": {
+      "enabled": false
+    }
+  },
+  "audit": {
+    "enabled": true,
+    "level": "debug",
+    "file": {
+      "path": "./logs/dev",
+      "format": "json",
+      "maxSize": "10MB",
+      "maxFiles": "5"
+    },
+    "operations": {
+      "logRead": true,
+      "logWrite": true,
+      "logValidation": true,
+      "logReload": true
+    }
+  },
+  "features": {
+    "autoResponse": {
+      "enabled": true,
+      "delay": {
+        "min": 100,
+        "max": 500
+      }
+    },
+    "analytics": {
+      "enabled": true
+    },
+    "backup": {
+      "enabled": false
+    }
+  }
+}

@@ -1,207 +1,321 @@
 /**
- * 千牛客服自动化系统主入口
+ * 千牛客服消息处理系统
+ * 主入口文件
  */
-const WebSocket = require('ws');
-const path = require('path');
-const express = require('express');
-const WebSocketService = require('./services/WebSocketService');
-const MessageProcessor = require('./services/messageProcessor');
-const BusinessLogicProcessor = require('./services/businessLogic');
+import path from 'path';
+import WebSocketService from './services/websocketService.js';
+import MessageProcessor from './services/messageProcessor/index.js';
+import BusinessLogic from './services/businessLogic/index.js';
+import DataService from './services/dataService.js';
+import DataServiceFactory from './services/dataServiceFactory.js';
+import { Logger } from './utils/Logger.js';
+import { ErrorHandler } from './utils/ErrorHandler.js';
+import { PerformanceMonitor } from './utils/PerformanceMonitor.js';
+import SessionManager from './utils/SessionManager.js';
+import { ConfigManager } from './config/ConfigManager.js';
+import models from './models/index.js';
 
-// 初始化配置
-const PORT = process.env.PORT || 3000;
-const WS_PORT = process.env.WS_PORT || 8080;
+// 加载环境变量
+import dotenv from 'dotenv';
+dotenv.config();
 
-// 初始化Express应用
-const app = express();
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+// 全局变量声明
+let configManager;
+let config;
+let logger;
+let wsService;
+let dataService;
+let messageProcessor;
+let businessLogicProcessor;
+let dataServiceFactory;
 
-// 初始化消息处理器
-const messageProcessor = new MessageProcessor({
-  dataPath: path.join(__dirname, 'services/messageProcessor/data'),
-  enableLogging: true
-});
+// 初始化系统配置
+async function initializeConfig() {
+  // 初始化配置管理器
+  configManager = new ConfigManager();
+  await configManager.initialize();
 
-// 初始化业务逻辑处理器
-const businessLogic = new BusinessLogicProcessor({
-  dataPath: path.join(__dirname, 'services/businessLogic/data'),
-  enableLogging: true,
-  autoReplyEnabled: true
-});
+  // 获取配置项
+  config = {
+    websocket: {
+      port: configManager.get('websocket.port', 8080),
+      path: configManager.get('websocket.path', '/ws'),
+      heartbeatInterval: configManager.get('websocket.heartbeatInterval', 30000),
+      maxConnections: configManager.get('websocket.maxConnections', 1000),
+      messageRateLimit: configManager.get('websocket.messageRateLimit', 100)
+    },
+    database: {
+      host: configManager.get('database.host', 'localhost'),
+      port: configManager.get('database.port', 3306),
+      username: configManager.get('database.username', 'root'),
+      password: configManager.get('database.password', ''),
+      database: configManager.get('database.database', 'qianniu_service')
+    },
+    features: {
+      autoReply: configManager.get('features.autoReply', false),
+      statistics: configManager.get('features.statistics', true),
+      customerBehavior: configManager.get('features.customerBehavior', true),
+      performanceMonitoring: configManager.get('features.performanceMonitoring', true)
+    },
+    logging: {
+      level: configManager.get('logging.level', 'info'),
+      enableConsole: configManager.get('logging.enableConsole', true),
+      enableFile: configManager.get('logging.enableFile', false),
+      filePath: configManager.get('logging.filePath', './logs/app.log')
+    }
+   };
 
-// 初始化WebSocket服务
-const wsService = new WebSocketService({
-  port: WS_PORT,
-  pingInterval: 30000,
-  autoReconnect: true
-});
+  // 初始化工具类
+  logger = new Logger({
+    level: config.logging.level,
+    enableConsole: config.logging.enableConsole,
+    enableFile: config.logging.enableFile,
+    filePath: config.logging.filePath
+  });
 
-// 设置WebSocket消息处理
-wsService.on('message', async (message, clientId) => {
+  // 将ConfigManager实例传递给Logger以便记录配置变更
+  logger.info('配置管理器初始化完成', {
+    environment: configManager.get('environment', 'development')
+  });
+}
+
+
+
+// 启动系统
+async function startSystem() {
   try {
-    console.log(`收到消息 [${clientId}]: ${message.slice(0, 100)}...`);
+    // 首先初始化配置
+    await initializeConfig();
     
-    // 处理消息
-    const processedResult = await messageProcessor.process(message, { clientId });
+    logger.info('千牛客服消息处理系统启动中...', {
+      version: '1.0.0',
+      environment: configManager.get('environment', 'development'),
+      config: {
+        websocketPort: config.websocket.port,
+        databaseHost: config.database.host,
+        featuresEnabled: Object.keys(config.features).filter(key => config.features[key])
+      }
+    });
+
+    // 初始化数据服务工厂
+    console.log('初始化数据服务工厂...');
+    dataServiceFactory = DataServiceFactory.getInstance();
+    dataServiceFactory.initialize(configManager, logger);
     
-    // 应用业务逻辑
-    const businessResult = businessLogic.process(processedResult);
-    
-    console.log(`处理结果 [${clientId}]:`, {
-      intent: processedResult.bestIntent?.intent,
-      confidence: processedResult.bestIntent?.confidence,
-      autoReply: businessResult.autoReply?.message?.slice(0, 100)
+    // 获取数据库配置并记录当前使用的数据库类型
+    const dbConfig = configManager.getDatabaseConfig();
+    const dbType = configManager.getDatabaseType();
+    console.log(`数据库类型: ${dbType}`);
+    logger.info('数据库配置加载完成', {
+      type: dbType,
+      config: dataServiceFactory.sanitizeConfig ? dataServiceFactory.sanitizeConfig(dbConfig) : dbConfig
     });
     
-    // 如果配置为自动回复，且有回复内容，则发送
-    if (
-      businessResult.autoReply && 
-      businessResult.autoReply.success && 
-      businessResult.autoReply.shouldAutoSend
-    ) {
-      wsService.sendMessage({
-        type: 'auto_reply',
-        content: businessResult.autoReply.message,
-        timestamp: Date.now(),
-        clientId
-      }, clientId);
-    }
+    // 创建数据服务实例
+    console.log('创建数据服务实例...');
+    dataService = await dataServiceFactory.createDataService();
+
+    // 创建WebSocket服务
+    console.log('准备创建WebSocketService - configManager:', configManager);
+    console.log('准备创建WebSocketService - config.websocket:', config.websocket);
     
-    // 发送处理结果通知给管理界面
-    wsService.broadcast({
-      type: 'message_processed',
-      clientId,
-      timestamp: Date.now(),
-      result: {
-        intent: processedResult.bestIntent?.intent,
-        confidence: processedResult.bestIntent?.confidence,
-        keywords: processedResult.parsedMessage?.keywords,
-        suggestedReply: businessResult.autoReply?.message || null,
-        statistics: businessResult.statistics,
-        customerInfo: businessResult.behavior?.customerInfo
-      }
-    }, [clientId]); // 排除发送消息的客户端
+    wsService = new WebSocketService({
+      port: config.websocket.port,
+      path: config.websocket.path,
+      heartbeatInterval: config.websocket.heartbeatInterval,
+      maxConnections: config.websocket.maxConnections,
+      messageRateLimit: config.websocket.messageRateLimit,
+      enableProcessing: true,
+      enablePerformanceMonitoring: config.features.performanceMonitoring,
+      enableSessionManagement: true,
+      autoReply: config.features.autoReply,
+      logLevel: config.logging.level,
+      configManager: configManager // 传递ConfigManager实例
+    });
+
+    // 创建消息处理器
+    messageProcessor = new MessageProcessor({
+      enableLogging: true,
+      enablePerformanceMonitoring: config.features.performanceMonitoring,
+      enableSessionManagement: true,
+      logLevel: config.logging.level,
+      configManager: configManager // 传递ConfigManager实例
+    });
+
+     // 创建业务逻辑处理器
+     businessLogicProcessor = new BusinessLogic({
+       enableLogging: true,
+       enablePerformanceMonitoring: config.features.performanceMonitoring,
+       enableSessionManagement: true,
+       autoReplyEnabled: config.features.autoReply,
+       statisticsEnabled: config.features.statistics,
+       customerBehaviorEnabled: config.features.customerBehavior,
+       logLevel: config.logging.level,
+       configManager: configManager, // 传递ConfigManager实例
+       dataService: dataService // 传递DataService实例
+     });
+     
+     console.log(`千牛服务已启动，监听端口: ${config.websocket.port}`);
+     console.log(`WebSocket地址: ws://localhost:${config.websocket.port}${config.websocket.path}`);
+     console.log(`数据存储: ${dbType.toUpperCase()}`);
+     
+     // 记录服务启动成功
+     logger.info('千牛服务启动成功', {
+       port: config.websocket.port,
+       path: config.websocket.path,
+       databaseType: dbType,
+       factoryStatus: dataServiceFactory.getStatus()
+     });
+
+    // 启动WebSocket服务
+    console.log(`启动WebSocket服务，端口: ${config.websocket.port}, 路径: ${config.websocket.path}`);
+    wsService.start();
+    
+    // 注册WebSocket事件处理
+    setupWebSocketEventHandlers();
+    
+    console.log('=== 系统启动完成 ===');
   } catch (error) {
-    console.error(`处理消息出错 [${clientId}]:`, error);
-    wsService.sendMessage({
-      type: 'error',
-      content: '消息处理失败，请稍后重试',
-      timestamp: Date.now(),
-      error: error.message
-    }, clientId);
+    console.error('系统启动失败:', error);
+    if (logger) {
+      logger.error('系统启动失败', {
+        error: error.message,
+        stack: error.stack
+      });
+    }
+    process.exit(1);
   }
-});
+}
 
-// 监听连接事件
-wsService.on('connection', (clientId) => {
-  console.log(`客户端连接 [${clientId}]`);
-  wsService.sendMessage({
-    type: 'welcome',
-    content: '欢迎连接千牛客服自动化系统',
-    timestamp: Date.now(),
-    clientId
-  }, clientId);
-});
-
-// 监听断开连接事件
-wsService.on('disconnect', (clientId) => {
-  console.log(`客户端断开连接 [${clientId}]`);
-  // 清理相关资源
-});
-
-// API路由定义
-
-// 获取消息统计数据
-app.get('/api/statistics', (req, res) => {
-  const type = req.query.type || 'global';
-  const stats = businessLogic.strategies.statistics.getStatistics(type);
-  res.json({ success: true, statistics: stats });
-});
-
-// 获取会话列表
-app.get('/api/sessions', (req, res) => {
-  const sessions = businessLogic.getAllSessions();
-  res.json({ success: true, sessions });
-});
-
-// 获取会话详情
-app.get('/api/sessions/:sessionId', (req, res) => {
-  const { sessionId } = req.params;
-  const session = businessLogic.getSessionDetail(sessionId);
+/**
+ * 设置WebSocket事件处理
+ */
+function setupWebSocketEventHandlers() {
+  // 处理客户端连接
+  wsService.on('connection', (clientId) => {
+    console.log(`客户端连接: ${clientId}`);
+    
+    // 如果启用了持久化，创建客户记录和会话
+    if (config.enableDatabasePersistence) {
+      dataService.getCustomer(clientId)
+        .then(customer => {
+          dataService.createSession(clientId, clientId);
+        })
+        .catch(error => {
+          console.error(`创建客户记录失败: ${error.message}`);
+        });
+    }
+  });
   
-  if (!session) {
-    return res.status(404).json({ success: false, message: '会话不存在' });
-  }
+  // 处理消息
+  wsService.on('message', (message, clientId) => {
+    console.log(`收到来自 ${clientId} 的消息`);
+    
+    // 调用业务逻辑处理
+    const result = wsService.processMessage(message, (processedResult) => {
+      // 处理完成后，交由业务逻辑处理器处理
+      businessLogicProcessor.process(processedResult);
+      
+      // 如果启用了数据持久化，保存消息
+      if (config.enableDatabasePersistence) {
+        dataService.addMessage(clientId, {
+          content: message.content || '',
+          type: message.type || 'chat',
+          sender: 'client',
+          timestamp: message.timestamp || Date.now(),
+          metadata: {
+            processedData: {
+              intents: processedResult.intents?.map(i => ({ intent: i.intent, confidence: i.confidence }))
+            }
+          }
+        }).catch(err => {
+          console.error('保存消息失败:', err);
+        });
+      }
+    });
+  });
   
-  res.json({ success: true, session });
-});
+  // 处理业务逻辑处理结果
+  businessLogicProcessor.on('business_processed', (result) => {
+    // 如果有自动回复，且配置为自动发送
+    if (result.autoReply && result.autoReply.shouldAutoSend) {
+      const clientId = result.sessionId;
+      
+      // 发送自动回复
+      wsService.sendTo(clientId, {
+        type: 'chat',
+        content: result.autoReply.message,
+        isAutoReply: true,
+        timestamp: Date.now()
+      });
+      
+      // 如果启用了数据持久化，保存自动回复消息
+      if (config.enableDatabasePersistence) {
+        dataService.addMessage(clientId, {
+          content: result.autoReply.message,
+          type: 'chat',
+          sender: 'system',
+          timestamp: Date.now(),
+          metadata: {
+            autoReply: true,
+            intent: result.autoReply.intent
+          }
+        }).catch(err => {
+          console.error('保存自动回复消息失败:', err);
+        });
+      }
+    }
+  });
+  
+  // 处理断开连接
+  wsService.on('disconnection', (clientId) => {
+    console.log(`客户端断开连接: ${clientId}`);
+    
+    // 如果启用了持久化，关闭会话
+    if (config.enableDatabasePersistence) {
+      dataService.closeSession(clientId).catch(error => {
+        console.error(`关闭会话失败: ${error.message}`);
+      });
+    }
+  });
+}
 
-// 设置自动回复状态
-app.post('/api/settings/auto-reply', (req, res) => {
-  const { enabled } = req.body;
-  
-  if (typeof enabled !== 'boolean') {
-    return res.status(400).json({ success: false, message: '参数错误' });
-  }
-  
-  const result = businessLogic.setAutoReplyEnabled(enabled);
-  res.json({ success: true, autoReplyEnabled: result });
-});
-
-// 添加自定义回复规则
-app.post('/api/reply-rules', (req, res) => {
-  const { intent, pattern, reply } = req.body;
-  
-  if (!intent || !pattern || !reply) {
-    return res.status(400).json({ success: false, message: '参数不完整' });
-  }
+// 处理退出信号
+process.on('SIGINT', async () => {
+  console.log('接收到退出信号，正在关闭服务...');
   
   try {
-    const result = businessLogic.strategies.autoReply.addRule(intent, pattern, reply);
-    res.json({ success: result });
+    // 关闭WebSocket服务
+    if (wsService) {
+      wsService.stop();
+      console.log('WebSocket服务已关闭');
+    }
+    
+    // 销毁数据服务工厂
+    if (dataServiceFactory) {
+      dataServiceFactory.destroy();
+      console.log('数据服务工厂已销毁');
+    }
+    
+    // 销毁配置管理器
+    if (configManager) {
+      configManager.destroy();
+      console.log('配置管理器已销毁');
+    }
+    
+    console.log('服务已安全关闭');
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error('关闭服务时出错:', error);
+    if (logger) {
+      logger.error('关闭服务时出错', {
+        error: error.message,
+        stack: error.stack
+      });
+    }
   }
-});
-
-// 设置回复模式
-app.post('/api/settings/reply-mode', (req, res) => {
-  const { mode } = req.body;
-  
-  if (!['auto', 'suggest', 'hybrid'].includes(mode)) {
-    return res.status(400).json({ success: false, message: '无效的模式' });
-  }
-  
-  const result = businessLogic.strategies.autoReply.setReplyMode(mode);
-  res.json({ success: result, mode });
-});
-
-// 清理过期会话
-app.post('/api/sessions/cleanup', (req, res) => {
-  const { maxAge } = req.body;
-  const ageInMs = maxAge ? parseInt(maxAge) * 1000 : 7200000; // 默认2小时
-  
-  const count = businessLogic.cleanupSessions(ageInMs);
-  res.json({ success: true, cleanedCount: count });
-});
-
-// 启动HTTP服务器
-app.listen(PORT, () => {
-  console.log(`HTTP服务器运行在端口 ${PORT}`);
-});
-
-// 启动WebSocket服务器
-wsService.start();
-
-// 进程退出处理
-process.on('SIGINT', () => {
-  console.log('正在关闭服务...');
-  wsService.stop();
-  
-  // 保存数据
-  businessLogic.strategies.statistics.dispose();
-  businessLogic.strategies.customerBehavior.dispose();
   
   process.exit(0);
-}); 
+});
+
+// 启动服务
+startSystem();

@@ -1,0 +1,159 @@
+{
+  "app": {
+    "debug": false
+  },
+  "server": {
+    "port": 8000,
+    "timeout": 60000
+  },
+  "websocket": {
+    "port": 8080,
+    "maxConnections": 5000,
+    "heartbeat": {
+      "interval": 60000,
+      "timeout": 10000
+    }
+  },
+  "database": {
+    "mongodb": {
+      "uri": "mongodb://prod-db-server:27017/qianniu_prod",
+      "options": {
+        "maxPoolSize": 50,
+        "serverSelectionTimeoutMS": 10000,
+        "socketTimeoutMS": 60000
+      }
+    },
+    "mockMode": false,
+    "enablePersistence": true
+  },
+  "logging": {
+    "level": "info",
+    "enableConsole": false,
+    "enableFile": true,
+    "file": {
+      "path": "/var/log/qianniu",
+      "filename": "production.log",
+      "maxSize": "50m",
+      "maxFiles": "30d"
+    },
+    "modules": {
+      "websocket": "warn",
+      "database": "error",
+      "business": "info",
+      "performance": "warn"
+    }
+  },
+  "performance": {
+    "monitoring": {
+      "enabled": true,
+      "bufferSize": 2000,
+      "collectInterval": 30000,
+      "cleanupInterval": 600000,
+      "maxDataAge": 7200000
+    },
+    "systemMetrics": {
+      "enabled": true,
+      "cpuThreshold": 85,
+      "memoryThreshold": 90
+    },
+    "customMetrics": {
+      "enabled": true
+    },
+    "alerts": {
+      "enabled": true,
+      "rules": [
+        {
+          "name": "严重CPU使用率",
+          "metric": "cpu",
+          "threshold": 95,
+          "operator": ">",
+          "duration": 30000
+        },
+        {
+          "name": "严重内存使用率",
+          "metric": "memory",
+          "threshold": 95,
+          "operator": ">",
+          "duration": 30000
+        },
+        {
+          "name": "高响应时间",
+          "metric": "responseTime",
+          "threshold": 5000,
+          "operator": ">",
+          "duration": 60000
+        }
+      ]
+    }
+  },
+  "business": {
+    "intent": {
+      "confidence": {
+        "threshold": 0.8,
+        "fallback": 0.4
+      },
+      "templates": {
+        "cacheSize": 500,
+        "refreshInterval": 600000
+      }
+    },
+    "session": {
+      "timeout": 3600000,
+      "maxSessions": 50000,
+      "cleanupInterval": 600000
+    },
+    "message": {
+      "rateLimiting": {
+        "enabled": true,
+        "maxPerMinute": 30,
+        "maxPerHour": 500
+      }
+    }
+  },
+  "security": {
+    "cors": {
+      "enabled": true,
+      "origins": ["https://your-domain.com"],
+      "methods": ["GET", "POST"]
+    },
+    "rateLimit": {
+      "enabled": true,
+      "windowMs": 900000,
+      "max": 50
+    }
+  },
+  "audit": {
+    "enabled": true,
+    "level": "info",
+    "file": {
+      "path": "/var/log/qianniu",
+      "format": "json",
+      "maxSize": "50MB",
+      "maxFiles": "10"
+    },
+    "operations": {
+      "logRead": false,
+      "logWrite": true,
+      "logValidation": true,
+      "logReload": true
+    }
+  },
+  "features": {
+    "autoResponse": {
+      "enabled": true,
+      "delay": {
+        "min": 1000,
+        "max": 3000
+      }
+    },
+    "analytics": {
+      "enabled": true,
+      "retention": "90d"
+    },
+    "backup": {
+      "enabled": true,
+      "interval": "daily",
+      "retention": "30d"
+    }
+  }
+}

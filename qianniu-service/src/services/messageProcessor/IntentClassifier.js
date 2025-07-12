@@ -2,12 +2,29 @@
  * 意图分类器
  * 负责识别消息的意图类型
  */
-const fs = require('fs');
-const path = require('path');
-const natural = require('natural');
+import fs from 'fs';
+import path from 'path';
+import natural from 'natural';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 class IntentClassifier {
-  constructor() {
+  constructor(options = {}) {
+    // 接收工具类实例
+    this.logger = options.logger;
+    this.errorHandler = options.errorHandler;
+    this.performanceMonitor = options.performanceMonitor;
+    
+    // 配置选项
+    this.options = {
+      enablePerformanceMonitoring: options.enablePerformanceMonitoring || false,
+      confidenceThreshold: options.confidenceThreshold || 0.5,
+      maxResults: options.maxResults || 5,
+      ...options
+    };
+    
     // 创建TF-IDF实例
     this.tfidf = new natural.TfIdf();
     
@@ -16,6 +33,15 @@ class IntentClassifier {
     
     // 初始化分类器
     this.initializeClassifier();
+    
+    // 记录初始化
+    if (this.logger) {
+      this.logger.info('IntentClassifier初始化完成', {
+        intentsCount: this.intents?.length || 0,
+        classifierReady: !!this.classifier,
+        options: this.options
+      });
+    }
   }
 
   /**
@@ -24,11 +50,36 @@ class IntentClassifier {
   loadIntents() {
     try {
       const intentsPath = path.join(__dirname, 'data', 'intents.json');
+      
+      if (!fs.existsSync(intentsPath)) {
+        if (this.logger) {
+          this.logger.warn('意图数据文件不存在，使用默认配置', { path: intentsPath });
+        }
+        this.intents = [];
+        return;
+      }
+      
       const intentsData = fs.readFileSync(intentsPath, 'utf8');
       this.intents = JSON.parse(intentsData).intents || [];
-      console.log(`意图数据加载成功，共${this.intents.length}种意图`);
+      
+      if (this.logger) {
+        this.logger.info('意图数据加载成功', {
+          count: this.intents.length,
+          path: intentsPath
+        });
+      }
     } catch (error) {
-      console.error('加载意图数据失败:', error);
+      if (this.errorHandler) {
+        const handledError = this.errorHandler.handleError(error, {
+          context: 'loadIntents',
+          path: path.join(__dirname, 'data', 'intents.json')
+        });
+        
+        if (this.logger) {
+          this.logger.error('加载意图数据失败', { error: handledError.message });
+        }
+      }
+      
       this.intents = [];
     }
   }
@@ -37,21 +88,33 @@ class IntentClassifier {
    * 初始化分类器
    */
   initializeClassifier() {
+    const startTime = Date.now();
+    
     try {
       // 使用朴素贝叶斯分类器
       this.classifier = new natural.BayesClassifier();
+      
+      let totalPatterns = 0;
       
       // 为分类器添加训练数据
       if (this.intents && this.intents.length > 0) {
         this.intents.forEach(intent => {
           intent.patterns.forEach(pattern => {
             this.classifier.addDocument(pattern, intent.name);
+            totalPatterns++;
           });
         });
         
         // 训练分类器
         this.classifier.train();
-        console.log('意图分类器训练完成');
+        
+        if (this.logger) {
+          this.logger.info('意图分类器训练完成', {
+            intentsCount: this.intents.length,
+            patternsCount: totalPatterns,
+            trainingTime: Date.now() - startTime
+          });
+        }
       }
       
       // 初始化TF-IDF
@@ -62,8 +125,29 @@ class IntentClassifier {
           });
         });
       }
+      
+      // 记录性能指标
+      if (this.performanceMonitor && this.options.enablePerformanceMonitoring) {
+        this.performanceMonitor.recordCustomMetric('classifier_init_time', Date.now() - startTime);
+      this.performanceMonitor.recordCustomMetric('intents_loaded', this.intents.length);
+      this.performanceMonitor.recordCustomMetric('patterns_loaded', totalPatterns);
+      }
+      
     } catch (error) {
-      console.error('初始化分类器失败:', error);
+      if (this.errorHandler) {
+        const handledError = this.errorHandler.handleError(error, {
+          context: 'initializeClassifier',
+          intentsCount: this.intents?.length || 0
+        });
+        
+        if (this.logger) {
+          this.logger.error('初始化分类器失败', {
+            error: handledError.message,
+            intentsCount: this.intents?.length || 0
+          });
+        }
+      }
+      
       this.classifier = null;
     }
   }
@@ -74,45 +158,138 @@ class IntentClassifier {
    * @returns {Array} 识别出的意图数组，按置信度排序
    */
   classify(parsedMessage) {
-    if (!parsedMessage || !parsedMessage.cleanContent) {
+    const startTime = Date.now();
+    
+    try {
+      if (!parsedMessage || !parsedMessage.cleanContent) {
+        if (this.logger) {
+          this.logger.warn('无效的消息对象或内容为空');
+        }
+        return [{
+          intent: 'unknown',
+          confidence: 0,
+          method: 'default'
+        }];
+      }
+
+      const content = parsedMessage.cleanContent;
+      
+      // 首先使用模式匹配识别意图（更精确）
+      const patternResult = this.classifyByPatterns(content);
+      
+      // 如果模式匹配有高置信度结果，直接返回
+      const highConfidencePattern = patternResult.find(r => r.confidence > 0.7);
+      if (highConfidencePattern) {
+        const processingTime = Date.now() - startTime;
+        
+        if (this.performanceMonitor && this.options.enablePerformanceMonitoring) {
+          this.performanceMonitor.recordCustomMetric('intent_classification_time', processingTime);
+      this.performanceMonitor.recordCustomMetric('intent_classified', 1);
+      this.performanceMonitor.recordCustomMetric('high_confidence_match', 1);
+        }
+        
+        if (this.logger) {
+          this.logger.debug('高置信度意图匹配', {
+            intent: highConfidencePattern.intent,
+            confidence: highConfidencePattern.confidence,
+            method: highConfidencePattern.method,
+            processingTime
+          });
+        }
+        
+        return [highConfidencePattern];
+      }
+      
+      // 使用关键词匹配增强识别
+      let keywordResults = [];
+      if (parsedMessage.keywords && parsedMessage.keywords.length > 0) {
+        keywordResults = this.classifyByKeywords(parsedMessage.keywords);
+      }
+      
+      // 使用分类器进行识别
+      let classifierResult = [];
+      if (this.classifier) {
+        try {
+          classifierResult = this.classifyByClassifier(content);
+        } catch (error) {
+          if (this.errorHandler) {
+            const handledError = this.errorHandler.handleError(error, {
+              context: 'classifyByClassifier',
+              content: content.substring(0, 100)
+            });
+            
+            if (this.logger) {
+              this.logger.error('分类器识别失败', {
+                error: handledError.message,
+                contentLength: content.length
+              });
+            }
+          }
+        }
+      }
+      
+      // 合并结果并按置信度排序
+      const results = [...patternResult, ...keywordResults, ...classifierResult];
+      const uniqueResults = this.deduplicateResults(results);
+      const sortedResults = uniqueResults.sort((a, b) => b.confidence - a.confidence);
+      
+      // 限制返回结果数量
+      const finalResults = sortedResults.slice(0, this.options.maxResults);
+      
+      // 记录性能指标
+      const processingTime = Date.now() - startTime;
+      
+      if (this.performanceMonitor && this.options.enablePerformanceMonitoring) {
+        this.performanceMonitor.recordCustomMetric('intent_classification_time', processingTime);
+    this.performanceMonitor.recordCustomMetric('intent_classified', 1);
+    this.performanceMonitor.recordCustomMetric('pattern_matches', patternResult.length);
+    this.performanceMonitor.recordCustomMetric('keyword_matches', keywordResults.length);
+    this.performanceMonitor.recordCustomMetric('classifier_matches', classifierResult.length);
+    this.performanceMonitor.recordCustomMetric('final_results', finalResults.length);
+      }
+      
+      if (this.logger) {
+        this.logger.debug('意图分类完成', {
+          contentLength: content.length,
+          patternMatches: patternResult.length,
+          keywordMatches: keywordResults.length,
+          classifierMatches: classifierResult.length,
+          finalResults: finalResults.length,
+          bestIntent: finalResults[0]?.intent || 'none',
+          bestConfidence: finalResults[0]?.confidence || 0,
+          processingTime
+        });
+      }
+      
+      return finalResults.length > 0 ? finalResults : [{
+        intent: 'unknown',
+        confidence: 0,
+        method: 'fallback'
+      }];
+      
+    } catch (error) {
+      if (this.errorHandler) {
+        const handledError = this.errorHandler.handleError(error, {
+          context: 'classify',
+          parsedMessage,
+          processingTime: Date.now() - startTime
+        });
+        
+        if (this.logger) {
+          this.logger.error('意图分类失败', {
+            error: handledError.message,
+            processingTime: Date.now() - startTime
+          });
+        }
+      }
+      
       return [{
         intent: 'unknown',
-        confidence: 0
+        confidence: 0,
+        method: 'error',
+        error: error.message
       }];
     }
-
-    const content = parsedMessage.cleanContent;
-    
-    // 首先使用模式匹配识别意图（更精确）
-    const patternResult = this.classifyByPatterns(content);
-    
-    // 如果模式匹配有高置信度结果，直接返回
-    const highConfidencePattern = patternResult.find(r => r.confidence > 0.7);
-    if (highConfidencePattern) {
-      return [highConfidencePattern];
-    }
-    
-    // 使用关键词匹配增强识别
-    let keywordResults = [];
-    if (parsedMessage.keywords && parsedMessage.keywords.length > 0) {
-      keywordResults = this.classifyByKeywords(parsedMessage.keywords);
-    }
-    
-    // 使用分类器进行识别
-    let classifierResult = [];
-    if (this.classifier) {
-      try {
-        classifierResult = this.classifyByClassifier(content);
-      } catch (error) {
-        console.error('分类器识别失败:', error);
-      }
-    }
-    
-    // 合并结果并按置信度排序
-    const results = [...patternResult, ...keywordResults, ...classifierResult];
-    const uniqueResults = this.deduplicateResults(results);
-    
-    return uniqueResults.sort((a, b) => b.confidence - a.confidence);
   }
   
   /**
@@ -314,4 +491,4 @@ class IntentClassifier {
   }
 }
 
-module.exports = IntentClassifier; 
+export default IntentClassifier;

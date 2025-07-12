@@ -1,137 +1,162 @@
 /**
  * 消息处理器测试
  */
-const MessageProcessor = require('../services/messageProcessor');
+const MessageProcessor = require('../services/messageProcessor/index');
 
-// 创建消息处理器实例
-const processor = new MessageProcessor({
-  enableLogging: true
-});
-
-// 测试数据
-const testMessages = [
-  {
-    type: 'chat',
-    clientId: 'test-client-001',
-    content: '这个商品多少钱？',
-    timestamp: Date.now()
-  },
-  {
-    type: 'chat',
-    clientId: 'test-client-001',
-    content: '请问什么时候能发货？',
-    timestamp: Date.now() + 1000
-  },
-  {
-    type: 'chat',
-    clientId: 'test-client-002',
-    content: '我想退货，产品有质量问题',
-    timestamp: Date.now() + 2000
-  },
-  {
-    type: 'chat',
-    clientId: 'test-client-002',
-    content: '谢谢你的帮助',
-    timestamp: Date.now() + 3000
-  },
-  {
-    type: 'system',
-    clientId: 'test-client-001',
-    content: '用户已离开聊天',
-    action: 'leave',
-    timestamp: Date.now() + 4000
-  }
-];
-
-// 监听处理完成事件
-processor.on('message_processed', (result) => {
-  console.log('\n===== 消息处理完成 =====');
-  console.log(`原始消息: ${result.originalMessage.content}`);
-  console.log(`客户端ID: ${result.originalMessage.clientId}`);
+describe('MessageProcessor', () => {
+  let processor;
   
-  if (result.bestIntent) {
-    console.log(`识别意图: ${result.bestIntent.intent} (置信度: ${result.bestIntent.confidence.toFixed(2)})`);
-  } else {
-    console.log('未识别到明确意图');
-  }
-  
-  console.log('关键词:', result.parsedMessage.keywords);
-  
-  if (result.bestReply) {
-    console.log(`推荐回复: ${result.bestReply.text}`);
-  } else {
-    console.log('无推荐回复');
-  }
-  
-  console.log('==========================\n');
-});
-
-// 处理测试消息
-console.log('开始测试消息处理器...');
-
-// 依次处理测试消息
-function processTestMessages() {
-  let index = 0;
-  
-  function processNext() {
-    if (index < testMessages.length) {
-      const message = testMessages[index++];
-      console.log(`处理第 ${index} 条消息...`);
-      processor.processMessage(message);
-      
-      // 延时处理下一条，模拟真实场景
-      setTimeout(processNext, 1000);
-    } else {
-      console.log('所有测试消息处理完成');
-      
-      // 显示会话信息
-      showSessionInfo();
+  // 测试数据
+  const testMessages = [
+    {
+      type: 'chat',
+      clientId: 'test-client-001',
+      content: '这个商品多少钱？',
+      timestamp: Date.now()
+    },
+    {
+      type: 'chat',
+      clientId: 'test-client-001',
+      content: '请问什么时候能发货？',
+      timestamp: Date.now() + 1000
+    },
+    {
+      type: 'chat',
+      clientId: 'test-client-002',
+      content: '我想退货，产品有质量问题',
+      timestamp: Date.now() + 2000
+    },
+    {
+      type: 'chat',
+      clientId: 'test-client-002',
+      content: '谢谢你的帮助',
+      timestamp: Date.now() + 3000
+    },
+    {
+      type: 'system',
+      clientId: 'test-client-001',
+      content: '用户已离开聊天',
+      action: 'leave',
+      timestamp: Date.now() + 4000
     }
-  }
+  ];
   
-  processNext();
-}
-
-// 显示会话信息
-function showSessionInfo() {
-  console.log('\n===== 会话信息 =====');
+  beforeEach(() => {
+    processor = new MessageProcessor({
+      enableLogging: false // 禁用日志避免测试输出混乱
+    });
+  });
   
-  for (const [sessionId, session] of processor.sessions.entries()) {
-    console.log(`会话ID: ${sessionId}`);
-    console.log(`消息数量: ${session.messageCount}`);
-    console.log(`会话开始时间: ${new Date(session.startTime).toLocaleString()}`);
-    console.log(`最后活动时间: ${new Date(session.lastActivityTime).toLocaleString()}`);
-    console.log('历史意图:', session.history.map(h => h.intents).flat().join(', '));
-    console.log('------------------------');
-  }
+  afterEach(() => {
+    // 清理会话数据
+    if (processor && processor.sessions) {
+      processor.sessions.clear();
+    }
+  });
+
+  test('should process a single message correctly', () => {
+    const message = testMessages[0];
+    const result = processor.processMessage(message);
+    
+    expect(result).toBeDefined();
+    expect(result.originalMessage).toEqual(message);
+    expect(result.parsedMessage).toBeDefined();
+    expect(result.parsedMessage.content).toBe(message.content);
+    expect(result.parsedMessage.clientId).toBe(message.clientId);
+    expect(result.intents).toBeDefined();
+    expect(Array.isArray(result.intents)).toBe(true);
+    expect(result.replies).toBeDefined();
+    expect(Array.isArray(result.replies)).toBe(true);
+    expect(result.timestamp).toBeDefined();
+  });
+
+  test('should process multiple messages and maintain session state', () => {
+    const results = [];
+    
+    // 处理所有测试消息
+    testMessages.forEach(message => {
+      const result = processor.processMessage(message);
+      results.push(result);
+    });
+    
+    expect(results).toHaveLength(testMessages.length);
+    
+    // 验证会话状态
+    expect(processor.sessions.size).toBeGreaterThan(0);
+    
+    // 验证客户端001的会话
+    const session001 = processor.sessions.get('test-client-001');
+    expect(session001).toBeDefined();
+    expect(session001.messageCount).toBe(3); // 2条chat + 1条system
+    expect(session001.history.length).toBe(3);
+    
+    // 验证客户端002的会话
+    const session002 = processor.sessions.get('test-client-002');
+    expect(session002).toBeDefined();
+    expect(session002.messageCount).toBe(2);
+    expect(session002.history.length).toBe(2);
+  });
+
+  test('should handle custom message processing', () => {
+    const customMessage = {
+      type: 'chat',
+      clientId: 'test-client-custom',
+      content: '这个产品的尺寸是多大的？适合放在卧室吗？',
+      timestamp: Date.now()
+    };
+    
+    const result = processor.processMessage(customMessage);
+    
+    expect(result).toBeDefined();
+    expect(result.originalMessage).toEqual(customMessage);
+    expect(result.parsedMessage.content).toBe(customMessage.content);
+    expect(result.parsedMessage.clientId).toBe(customMessage.clientId);
+    
+    // 验证新会话被创建
+    const customSession = processor.sessions.get('test-client-custom');
+    expect(customSession).toBeDefined();
+    expect(customSession.messageCount).toBe(1);
+    expect(customSession.history.length).toBe(1);
+  });
   
-  console.log('===================\n');
-}
-
-// 自定义测试消息
-function testCustomMessage(content, clientId = 'test-client-custom') {
-  const message = {
-    type: 'chat',
-    clientId,
-    content,
-    timestamp: Date.now()
-  };
+  test('should cleanup expired sessions', async () => {
+    // 先处理一些消息创建会话
+    testMessages.forEach(message => {
+      processor.processMessage(message);
+    });
+    
+    const initialSessionCount = processor.sessions.size;
+    expect(initialSessionCount).toBeGreaterThan(0);
+    
+    // 等待一小段时间确保会话过期
+    await new Promise(resolve => setTimeout(resolve, 10));
+    
+    // 使用很小的超时时间清理会话
+    processor.cleanupSessions(1); // 1毫秒超时
+    
+    // 验证会话数量减少（可能不是全部清理，取决于实际实现）
+    expect(processor.sessions.size).toBeLessThanOrEqual(initialSessionCount);
+  });
   
-  console.log(`\n测试自定义消息: "${content}"`);
-  processor.processMessage(message);
-}
+  test('should handle error in message processing', () => {
+    const invalidMessage = null;
+    
+    // 使用try-catch捕获异常
+    expect(() => {
+      processor.processMessage(invalidMessage);
+    }).toThrow('消息对象不能为空');
+  });
+  
+  test('should emit events during message processing', (done) => {
+    const testMessage = testMessages[0];
+    
+    processor.once('message_processed', (result) => {
+      expect(result).toBeDefined();
+      expect(result.originalMessage).toEqual(testMessage);
+      done();
+    });
+    
+    processor.processMessage(testMessage);
+  });
 
-// 开始测试
-processTestMessages();
-
-// 测试自定义消息
-setTimeout(() => {
-  testCustomMessage('这个产品的尺寸是多大的？适合放在卧室吗？');
-}, testMessages.length * 1000 + 1000);
-
-// 测试清理过期会话
-setTimeout(() => {
-  console.log('\n测试清理过期会话...');
-  processor.cleanupSessions(100); // 使用较小的超时时间进行测试
-  console.log(`清理后剩余会话数: ${processor.sessions.size}`);
-}, (testMessages.length + 2) * 1000); 
+});

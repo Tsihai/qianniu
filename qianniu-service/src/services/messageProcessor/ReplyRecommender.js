@@ -2,11 +2,27 @@
  * 回复推荐器
  * 负责根据消息意图生成回复建议
  */
-const fs = require('fs');
-const path = require('path');
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import ErrorHandler from '../../utils/ErrorHandler.js';
+import Logger from '../../utils/Logger.js';
+import { PerformanceMonitor } from '../../utils/PerformanceMonitor.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 class ReplyRecommender {
-  constructor() {
+  constructor(options = {}) {
+    // 初始化工具类
+    this.errorHandler = options.errorHandler || new ErrorHandler();
+    this.logger = options.logger || new Logger();
+    this.performanceMonitor = options.performanceMonitor || new PerformanceMonitor();
+    
+    // 启动性能监控
+    if (options.enablePerformanceMonitoring) {
+      this.performanceMonitor.startMonitoring('replyRecommender');
+    }
     // 默认回复模板
     this.defaultReplies = [
       {
@@ -47,16 +63,31 @@ class ReplyRecommender {
    * 加载回复模板数据
    */
   loadReplyTemplates() {
+    const startTime = Date.now();
+    
     try {
       const repliesPath = path.join(__dirname, 'data', 'replies.json');
       const repliesData = fs.readFileSync(repliesPath, 'utf8');
       this.replies = JSON.parse(repliesData).replies || [];
-      console.log(`回复模板加载成功，共${this.replies.length}组模板`);
+      
+      const loadTime = Date.now() - startTime;
+      this.performanceMonitor.recordCustomMetric('template_load_time', loadTime);
+      this.performanceMonitor.recordCustomMetric('template_count', this.replies.length);
+      
+      this.logger.info(`回复模板加载成功，共${this.replies.length}组模板，耗时${loadTime}ms`);
     } catch (error) {
-      console.error('加载回复模板失败:', error);
+      this.errorHandler.handle(error, {
+        context: 'loadReplyTemplates',
+        severity: 'medium'
+      });
+      
       // 使用默认回复模板
       this.replies = this.defaultReplies;
-      console.log('使用默认回复模板');
+      this.logger.warn('使用默认回复模板');
+      
+      const loadTime = Date.now() - startTime;
+      this.performanceMonitor.recordCustomMetric('template_load_time', loadTime);
+      this.performanceMonitor.recordCustomMetric('template_load_failed', 1);
     }
   }
 
@@ -112,54 +143,125 @@ class ReplyRecommender {
    * @returns {Object} 回复建议
    */
   generateReply(parsedMessage, intentResult, context = {}) {
-    // 如果没有有效的意图识别结果，使用默认回复
-    if (!intentResult || !intentResult.intent) {
-      const defaultTemplates = this.getDefaultTemplates();
-      return {
-        text: this.selectRandomTemplate(defaultTemplates.templates),
-        confidence: 0,
-        intent: 'unknown'
-      };
-    }
+    const startTime = Date.now();
+    const replyId = `reply_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     
-    // 根据意图获取回复模板组
-    const templateGroup = this.getTemplatesByIntent(intentResult.intent);
-    
-    // 如果没有找到对应的模板组，使用默认回复
-    if (!templateGroup) {
-      const defaultTemplates = this.getDefaultTemplates();
-      return {
-        text: this.selectRandomTemplate(defaultTemplates.templates),
-        confidence: 0.3,
-        intent: intentResult.intent
-      };
-    }
-    
-    // 随机选择一个模板
-    let template = this.selectRandomTemplate(templateGroup.templates);
-    
-    // 合并上下文和产品信息
-    const mergedContext = { ...this.productInfo, ...context };
-    
-    // 提取消息中的关键信息
-    if (parsedMessage && parsedMessage.keywords) {
-      parsedMessage.keywords.forEach(keyword => {
-        // 根据关键词增强上下文
-        this.enhanceContextWithKeyword(mergedContext, keyword, intentResult.intent);
+    try {
+      this.logger.debug('开始生成回复建议', {
+        replyId,
+        intent: intentResult?.intent,
+        hasContext: !!context,
+        keywordCount: parsedMessage?.keywords?.length || 0
       });
+      
+      // 如果没有有效的意图识别结果，使用默认回复
+      if (!intentResult || !intentResult.intent) {
+        this.performanceMonitor.recordCustomMetric('reply_default_used', 1);
+        const defaultTemplates = this.getDefaultTemplates();
+        const result = {
+          text: this.selectRandomTemplate(defaultTemplates.templates),
+          confidence: 0,
+          intent: 'unknown',
+          replyId
+        };
+        
+        const generateTime = Date.now() - startTime;
+        this.performanceMonitor.recordCustomMetric('reply_generation_time', generateTime);
+        this.logger.info('使用默认回复模板', { replyId, generateTime });
+        
+        return result;
+      }
+      
+      // 根据意图获取回复模板组
+      const templateGroup = this.getTemplatesByIntent(intentResult.intent);
+      
+      // 如果没有找到对应的模板组，使用默认回复
+      if (!templateGroup) {
+        this.performanceMonitor.recordCustomMetric('reply_template_not_found', 1);
+        const defaultTemplates = this.getDefaultTemplates();
+        const result = {
+          text: this.selectRandomTemplate(defaultTemplates.templates),
+          confidence: 0.3,
+          intent: intentResult.intent,
+          replyId
+        };
+        
+        const generateTime = Date.now() - startTime;
+        this.performanceMonitor.recordCustomMetric('reply_generation_time', generateTime);
+        this.logger.warn('未找到对应意图的回复模板', { replyId, intent: intentResult.intent, generateTime });
+        
+        return result;
+      }
+      
+      // 随机选择一个模板
+      let template = this.selectRandomTemplate(templateGroup.templates);
+      
+      // 合并上下文和产品信息
+      const mergedContext = { ...this.productInfo, ...context };
+      
+      // 提取消息中的关键信息
+      if (parsedMessage && parsedMessage.keywords) {
+        const keywordStartTime = Date.now();
+        parsedMessage.keywords.forEach(keyword => {
+          // 根据关键词增强上下文
+          this.enhanceContextWithKeyword(mergedContext, keyword, intentResult.intent);
+        });
+        const keywordTime = Date.now() - keywordStartTime;
+        this.performanceMonitor.recordCustomMetric('reply_keyword_processing_time', keywordTime);
+      }
+      
+      // 替换模板中的变量
+      if (templateGroup.variables && templateGroup.variables.length > 0) {
+        const variableStartTime = Date.now();
+        template = this.fillTemplateVariables(template, templateGroup.variables, mergedContext);
+        const variableTime = Date.now() - variableStartTime;
+        this.performanceMonitor.recordCustomMetric('reply_variable_fill_time', variableTime);
+        this.performanceMonitor.recordCustomMetric('reply_variables_count', templateGroup.variables.length);
+      }
+      
+      const result = {
+        text: template,
+        confidence: intentResult.confidence,
+        intent: intentResult.intent,
+        isTemplate: true,
+        replyId
+      };
+      
+      const generateTime = Date.now() - startTime;
+      this.performanceMonitor.recordCustomMetric('reply_generation_time', generateTime);
+      this.performanceMonitor.recordCustomMetric('reply_generated', 1);
+      
+      this.logger.info('回复生成成功', {
+        replyId,
+        intent: intentResult.intent,
+        confidence: intentResult.confidence,
+        generateTime,
+        templateLength: template.length
+      });
+      
+      return result;
+      
+    } catch (error) {
+      const generateTime = Date.now() - startTime;
+      this.performanceMonitor.recordCustomMetric('reply_generation_time', generateTime);
+      this.performanceMonitor.recordCustomMetric('reply_generation_failed', 1);
+      
+      this.errorHandler.handle(error, {
+        context: 'generateReply',
+        replyId,
+        intent: intentResult?.intent,
+        severity: 'high'
+      });
+      
+      // 返回错误回复
+      return {
+        text: '抱歉，生成回复时出现了问题，请稍后再试。',
+        confidence: 0,
+        intent: 'error',
+        replyId,
+        error: true
+      };
     }
-    
-    // 替换模板中的变量
-    if (templateGroup.variables && templateGroup.variables.length > 0) {
-      template = this.fillTemplateVariables(template, templateGroup.variables, mergedContext);
-    }
-    
-    return {
-      text: template,
-      confidence: intentResult.confidence,
-      intent: intentResult.intent,
-      isTemplate: true
-    };
   }
   
   /**
@@ -229,38 +331,115 @@ class ReplyRecommender {
    * @returns {Array} 回复建议数组
    */
   generateMultipleReplies(parsedMessage, intents, context = {}, maxCount = 3) {
-    // 如果没有有效的意图，返回默认回复
-    if (!intents || intents.length === 0) {
-      const defaultReply = this.generateReply(parsedMessage, null, context);
-      return [defaultReply];
-    }
+    const startTime = Date.now();
+    const batchId = `batch_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     
-    // 为每个意图生成回复建议
-    const replies = [];
-    
-    for (let i = 0; i < Math.min(intents.length, maxCount); i++) {
-      const intent = intents[i];
-      const reply = this.generateReply(parsedMessage, intent, context);
+    try {
+      this.logger.debug('开始生成多个回复建议', {
+        batchId,
+        intentCount: intents?.length || 0,
+        maxCount,
+        hasContext: !!context
+      });
       
-      // 只添加非空回复
-      if (reply && reply.text) {
-        replies.push(reply);
+      // 如果没有有效的意图，返回默认回复
+      if (!intents || intents.length === 0) {
+        this.performanceMonitor.recordCustomMetric('multiple_replies_no_intents', 1);
+        const defaultReply = this.generateReply(parsedMessage, null, context);
+        
+        const generateTime = Date.now() - startTime;
+        this.performanceMonitor.recordCustomMetric('multiple_replies_generation_time', generateTime);
+        this.logger.info('无意图时生成默认回复', { batchId, generateTime });
+        
+        return [defaultReply];
       }
       
-      // 如果已达到最大数量，停止生成
-      if (replies.length >= maxCount) {
-        break;
+      // 为每个意图生成回复建议
+      const replies = [];
+      const processedIntents = Math.min(intents.length, maxCount);
+      
+      for (let i = 0; i < processedIntents; i++) {
+        const intent = intents[i];
+        const replyStartTime = Date.now();
+        
+        try {
+          const reply = this.generateReply(parsedMessage, intent, context);
+          
+          // 只添加非空回复
+          if (reply && reply.text) {
+            replies.push(reply);
+            const replyTime = Date.now() - replyStartTime;
+            this.performanceMonitor.recordCustomMetric('single_reply_in_batch_time', replyTime);
+          }
+          
+          // 如果已达到最大数量，停止生成
+          if (replies.length >= maxCount) {
+            break;
+          }
+        } catch (error) {
+          this.errorHandler.handle(error, {
+            context: 'generateMultipleReplies_singleReply',
+            batchId,
+            intentIndex: i,
+            intent: intent?.intent,
+            severity: 'medium'
+          });
+          
+          this.performanceMonitor.recordCustomMetric('single_reply_in_batch_failed', 1);
+        }
       }
+      
+      // 如果没有生成任何回复，返回默认回复
+      if (replies.length === 0) {
+        this.performanceMonitor.recordCustomMetric('multiple_replies_fallback_to_default', 1);
+        const defaultReply = this.generateReply(parsedMessage, null, context);
+        
+        const generateTime = Date.now() - startTime;
+        this.performanceMonitor.recordCustomMetric('multiple_replies_generation_time', generateTime);
+        this.logger.warn('所有意图回复生成失败，使用默认回复', { batchId, generateTime });
+        
+        return [defaultReply];
+      }
+      
+      const generateTime = Date.now() - startTime;
+      this.performanceMonitor.recordCustomMetric('multiple_replies_generation_time', generateTime);
+      this.performanceMonitor.recordCustomMetric('multiple_replies_count', replies.length);
+      this.performanceMonitor.recordCustomMetric('multiple_replies_generated', 1);
+      
+      this.logger.info('多个回复生成成功', {
+        batchId,
+        repliesCount: replies.length,
+        processedIntents,
+        generateTime
+      });
+      
+      return replies;
+      
+    } catch (error) {
+      const generateTime = Date.now() - startTime;
+      this.performanceMonitor.recordCustomMetric('multiple_replies_generation_time', generateTime);
+      this.performanceMonitor.recordCustomMetric('multiple_replies_generation_failed', 1);
+      
+      this.errorHandler.handle(error, {
+        context: 'generateMultipleReplies',
+        batchId,
+        intentCount: intents?.length || 0,
+        maxCount,
+        severity: 'high'
+      });
+      
+      // 返回错误回复
+      const errorReply = {
+        text: '抱歉，生成回复建议时出现了问题，请稍后再试。',
+        confidence: 0,
+        intent: 'error',
+        batchId,
+        error: true
+      };
+      
+      return [errorReply];
     }
-    
-    // 如果没有生成任何回复，返回默认回复
-    if (replies.length === 0) {
-      const defaultReply = this.generateReply(parsedMessage, null, context);
-      return [defaultReply];
-    }
-    
-    return replies;
   }
 }
 
-module.exports = ReplyRecommender; 
+export default ReplyRecommender;

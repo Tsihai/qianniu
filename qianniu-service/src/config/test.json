@@ -1,0 +1,79 @@
+{
+  "app": {
+    "name": "QianNiu Test App",
+    "version": "1.0.0",
+    "environment": "test",
+    "debug": true
+  },
+  "server": {
+    "port": 3001,
+    "host": "localhost",
+    "timeout": 30000
+  },
+  "websocket": {
+    "port": 3002,
+    "path": "/ws",
+    "heartbeat": {
+      "interval": 30000,
+      "timeout": 5000
+    },
+    "maxConnections": 100,
+    "compression": true
+  },
+  "database": {
+    "mongodb": {
+      "uri": "mongodb://localhost:27017/qianniu_test",
+      "options": {
+        "useNewUrlParser": true,
+        "useUnifiedTopology": true,
+        "maxPoolSize": 10,
+        "serverSelectionTimeoutMS": 5000,
+        "socketTimeoutMS": 45000
+      }
+    },
+    "mockMode": true,
+    "enablePersistence": false
+  },
+  "logging": {
+    "level": "debug",
+    "format": "simple",
+    "enableConsole": true,
+    "enableFile": false
+  },
+  "performance": {
+    "monitoring": {
+      "enabled": false,
+      "bufferSize": 1000,
+      "collectInterval": 5000,
+      "cleanupInterval": 300000,
+      "maxDataAge": 3600000
+    }
+  },
+  "cache": {
+    "enabled": true,
+    "maxSize": 1000,
+    "compressionEnabled": true
+  },
+  "features": {
+    "performanceMonitoring": false,
+    "sessionManagement": true,
+    "autoReply": false,
+    "statistics": false
+  },
+  "audit": {
+    "enabled": false,
+    "level": "info",
+    "file": {
+      "path": "./logs/test",
+      "format": "json",
+      "maxSize": "10MB",
+      "maxFiles": "5"
+    },
+    "operations": {
+      "logRead": false,
+      "logWrite": false,
+      "logValidation": false,
+      "logReload": false
+    }
+  }
+}

@@ -1,0 +1,516 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "千牛客服自动化系统配置Schema",
+  "type": "object",
+  "properties": {
+    "app": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        },
+        "environment": {
+          "type": "string",
+          "enum": ["development", "production", "test"]
+        },
+        "debug": {
+          "type": "boolean"
+        }
+      },
+      "required": ["name", "version"]
+    },
+    "server": {
+      "type": "object",
+      "properties": {
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "host": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 1000
+        }
+      },
+      "required": ["port"]
+    },
+    "websocket": {
+      "type": "object",
+      "properties": {
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^/.*"
+        },
+        "heartbeat": {
+          "type": "object",
+          "properties": {
+            "interval": {
+              "type": "integer",
+              "minimum": 1000
+            },
+            "timeout": {
+              "type": "integer",
+              "minimum": 1000
+            }
+          }
+        },
+        "maxConnections": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "compression": {
+          "type": "boolean"
+        }
+      },
+      "required": ["port", "path"]
+    },
+    "database": {
+      "type": "object",
+      "properties": {
+        "mongodb": {
+          "type": "object",
+          "properties": {
+            "uri": {
+              "type": "string",
+              "pattern": "^mongodb://.*"
+            },
+            "options": {
+              "type": "object",
+              "properties": {
+                "useNewUrlParser": {
+                  "type": "boolean"
+                },
+                "useUnifiedTopology": {
+                  "type": "boolean"
+                },
+                "maxPoolSize": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "serverSelectionTimeoutMS": {
+                  "type": "integer",
+                  "minimum": 1000
+                },
+                "socketTimeoutMS": {
+                  "type": "integer",
+                  "minimum": 1000
+                }
+              }
+            }
+          },
+          "required": ["uri"]
+        },
+        "mockMode": {
+          "type": "boolean"
+        },
+        "enablePersistence": {
+          "type": "boolean"
+        }
+      },
+      "required": ["mongodb"]
+    },
+    "logging": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": ["debug", "info", "warn", "error", "fatal"]
+        },
+        "format": {
+          "type": "string",
+          "enum": ["simple", "combined", "json"]
+        },
+        "enableConsole": {
+          "type": "boolean"
+        },
+        "enableFile": {
+          "type": "boolean"
+        },
+        "file": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "filename": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxSize": {
+              "type": "string"
+            },
+            "maxFiles": {
+              "type": "string"
+            }
+          }
+        },
+        "modules": {
+          "type": "object",
+          "patternProperties": {
+            ".*": {
+              "type": "string",
+              "enum": ["debug", "info", "warn", "error", "fatal"]
+            }
+          }
+        }
+      },
+      "required": ["level"]
+    },
+    "performance": {
+      "type": "object",
+      "properties": {
+        "monitoring": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "bufferSize": {
+              "type": "integer",
+              "minimum": 100
+            },
+            "collectInterval": {
+              "type": "integer",
+              "minimum": 1000
+            },
+            "cleanupInterval": {
+              "type": "integer",
+              "minimum": 60000
+            },
+            "maxDataAge": {
+              "type": "integer",
+              "minimum": 300000
+            }
+          }
+        },
+        "systemMetrics": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "cpuThreshold": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "memoryThreshold": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100
+            }
+          }
+        },
+        "customMetrics": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          }
+        },
+        "alerts": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "rules": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "metric": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "threshold": {
+                    "type": "number"
+                  },
+                  "operator": {
+                    "type": "string",
+                    "enum": [">", "<", ">=", "<=", "==", "!="]
+                  },
+                  "duration": {
+                    "type": "integer",
+                    "minimum": 1000
+                  }
+                },
+                "required": ["name", "metric", "threshold", "operator"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "business": {
+      "type": "object",
+      "properties": {
+        "intent": {
+          "type": "object",
+          "properties": {
+            "confidence": {
+              "type": "object",
+              "properties": {
+                "threshold": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "fallback": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                }
+              }
+            },
+            "templates": {
+              "type": "object",
+              "properties": {
+                "cacheSize": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "refreshInterval": {
+                  "type": "integer",
+                  "minimum": 60000
+                }
+              }
+            }
+          }
+        },
+        "session": {
+          "type": "object",
+          "properties": {
+            "timeout": {
+              "type": "integer",
+              "minimum": 60000
+            },
+            "maxSessions": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "cleanupInterval": {
+              "type": "integer",
+              "minimum": 60000
+            }
+          }
+        },
+        "message": {
+          "type": "object",
+          "properties": {
+            "maxLength": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "rateLimiting": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "maxPerMinute": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "maxPerHour": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "security": {
+      "type": "object",
+      "properties": {
+        "cors": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "origins": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "methods": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
+              }
+            },
+            "allowedHeaders": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "rateLimit": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "windowMs": {
+              "type": "integer",
+              "minimum": 1000
+            },
+            "max": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "encryption": {
+          "type": "object",
+          "properties": {
+            "algorithm": {
+              "type": "string"
+            },
+            "keyLength": {
+              "type": "integer",
+              "minimum": 16
+            }
+          }
+        }
+      }
+    },
+    "audit": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "level": {
+          "type": "string",
+          "enum": ["debug", "info", "warn", "error", "fatal"],
+          "default": "info"
+        },
+        "file": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "default": "./logs/config-audit.log"
+            },
+            "format": {
+              "type": "string",
+              "enum": ["simple", "combined", "json"],
+              "default": "json"
+            },
+            "maxSize": {
+              "type": "string",
+              "default": "10MB"
+            },
+            "maxFiles": {
+              "type": "string",
+              "default": "5"
+            }
+          }
+        },
+        "operations": {
+          "type": "object",
+          "properties": {
+            "logRead": {
+              "type": "boolean",
+              "default": false
+            },
+            "logWrite": {
+              "type": "boolean",
+              "default": true
+            },
+            "logValidation": {
+              "type": "boolean",
+              "default": true
+            },
+            "logReload": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        }
+      }
+    },
+    "features": {
+      "type": "object",
+      "properties": {
+        "autoResponse": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "delay": {
+              "type": "object",
+              "properties": {
+                "min": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "max": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          }
+        },
+        "analytics": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "retention": {
+              "type": "string"
+            }
+          }
+        },
+        "backup": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "interval": {
+              "type": "string",
+              "enum": ["hourly", "daily", "weekly"]
+            },
+            "retention": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  },
+  "required": ["app", "server", "websocket", "database", "logging", "audit"]
+}

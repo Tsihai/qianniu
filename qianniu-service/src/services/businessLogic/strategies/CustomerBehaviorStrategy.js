@@ -2,11 +2,26 @@
  * 客户行为分析策略处理器
  * 负责分析客户行为特征，为个性化交互提供支持
  */
-const fs = require('fs');
-const path = require('path');
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 class CustomerBehaviorStrategy {
   constructor(options = {}) {
+    // 集成统一工具类
+    this.logger = options.logger || console;
+    this.errorHandler = options.errorHandler;
+    this.performanceMonitor = options.performanceMonitor;
+    this.sessionManager = options.sessionManager;
+    
+    // 数据服务依赖注入
+    this.dataService = options.dataService;
+    if (!this.dataService) {
+      throw new Error('CustomerBehaviorStrategy requires dataService dependency');
+    }
+    
     // 配置选项
     this.options = {
       dataPath: options?.dataPath || path.join(__dirname, '../data/customer_behavior.json'),
@@ -31,62 +46,142 @@ class CustomerBehaviorStrategy {
     // 设置定时保存
     if (this.options.saveInterval > 0) {
       this.saveIntervalId = setInterval(() => {
-        this.saveData();
+        try {
+          this.saveData();
+        } catch (error) {
+          this.logger.error('定时保存客户行为数据失败', {
+            error: error.message,
+            interval: this.options.saveInterval
+          });
+          
+          if (this.errorHandler) {
+            this.errorHandler.handle(error, { context: 'CustomerBehaviorStrategy.autoSave' });
+          }
+        }
       }, this.options.saveInterval);
     }
     
-    console.log('客户行为分析策略处理器初始化完成');
+    this.logger.info('客户行为分析策略处理器初始化完成', {
+      saveInterval: this.options.saveInterval,
+      dataPath: this.options.dataPath,
+      maxCustomerProfiles: this.options.maxCustomerProfiles,
+      behaviorPatternsCount: this.options.behaviorPatterns.length
+    });
   }
   
   /**
    * 加载客户行为数据
    */
-  loadData() {
+  async loadData() {
+    const timer = this.performanceMonitor?.startTimer('customer_behavior_load_data');
+    
     try {
-      if (fs.existsSync(this.options.dataPath)) {
-        const data = fs.readFileSync(this.options.dataPath, 'utf8');
-        const profiles = JSON.parse(data);
-        
-        // 转换为Map
-        this.customerProfiles = new Map();
-        Object.entries(profiles).forEach(([clientId, profile]) => {
-          this.customerProfiles.set(clientId, profile);
-        });
-        
-        console.log(`加载了 ${this.customerProfiles.size} 条客户行为数据`);
+      // 从数据服务获取所有客户数据
+      const customers = await this.dataService.getAllCustomers();
+      
+      // 将客户数据转换为行为分析格式
+      for (const customer of customers) {
+        if (customer.behaviorData) {
+          this.customerProfiles.set(customer.clientId, {
+            id: customer.clientId,
+            firstSeen: customer.createdAt ? new Date(customer.createdAt).getTime() : Date.now(),
+            lastActivity: customer.updatedAt ? new Date(customer.updatedAt).getTime() : Date.now(),
+            messageCount: customer.behaviorData.messageCount || 0,
+            intents: customer.behaviorData.intents || {},
+            keywords: customer.behaviorData.keywords || {},
+            behaviorPatterns: customer.behaviorData.behaviorPatterns || {},
+            interactions: customer.behaviorData.interactions || []
+          });
+        }
       }
+      
+      this.logger.info('客户行为数据加载成功', {
+        source: 'dataService',
+        profilesCount: this.customerProfiles.size
+      });
+      
     } catch (error) {
-      console.error('加载客户行为数据失败:', error);
+      const errorMsg = '加载客户行为数据失败';
+      this.logger.error(errorMsg, { error: error.message });
+      
+      if (this.errorHandler) {
+        this.errorHandler.handle(error, { context: 'CustomerBehaviorStrategy.loadData' });
+      }
+      
+      this.customerProfiles = new Map();
+    } finally {
+      timer?.end();
     }
   }
   
   /**
    * 保存客户行为数据
    */
-  saveData() {
+  async saveData() {
+    const timer = this.performanceMonitor?.startTimer('customer_behavior_save_data');
+    
     try {
-      const dir = path.dirname(this.options.dataPath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
+      let savedCount = 0;
+      
+      // 遍历所有客户行为数据并保存到数据服务
+      for (const [clientId, profile] of this.customerProfiles) {
+        try {
+          // 获取现有客户数据
+          let customer = await this.dataService.getCustomer(clientId);
+          
+          const behaviorData = {
+            messageCount: profile.messageCount,
+            intents: profile.intents,
+            keywords: profile.keywords,
+            behaviorPatterns: profile.behaviorPatterns,
+            interactions: profile.interactions,
+            lastActivity: profile.lastActivity,
+            firstSeen: profile.firstSeen
+          };
+          
+          if (customer) {
+            // 更新现有客户的行为数据
+            await this.dataService.updateCustomer(clientId, {
+              behaviorData,
+              updatedAt: new Date()
+            });
+          } else {
+            // 创建新客户记录
+            await this.dataService.createCustomer({
+              clientId,
+              behaviorData,
+              createdAt: new Date(profile.firstSeen),
+              updatedAt: new Date()
+            });
+          }
+          
+          savedCount++;
+        } catch (error) {
+          this.logger.error('保存单个客户行为数据失败', {
+            clientId,
+            error: error.message
+          });
+        }
       }
       
-      // 将Map转换为对象
-      const profiles = {};
-      this.customerProfiles.forEach((profile, clientId) => {
-        profiles[clientId] = profile;
+      this.logger.info('客户行为数据保存成功', {
+        source: 'dataService',
+        profilesCount: this.customerProfiles.size,
+        savedCount
       });
       
-      fs.writeFileSync(
-        this.options.dataPath,
-        JSON.stringify(profiles, null, 2),
-        'utf8'
-      );
-      
-      console.log('客户行为数据保存成功');
       return true;
     } catch (error) {
-      console.error('保存客户行为数据失败:', error);
+      const errorMsg = '保存客户行为数据失败';
+      this.logger.error(errorMsg, { error: error.message });
+      
+      if (this.errorHandler) {
+        this.errorHandler.handle(error, { context: 'CustomerBehaviorStrategy.saveData' });
+      }
+      
       return false;
+    } finally {
+      timer?.end();
     }
   }
   
@@ -97,7 +192,13 @@ class CustomerBehaviorStrategy {
    * @returns {Object} 处理结果
    */
   process(processedResult, sessionContext) {
+    const timer = this.performanceMonitor?.startTimer('CustomerBehaviorStrategy.process');
+    
     if (!processedResult || !processedResult.parsedMessage) {
+      this.logger.warn('无效的消息处理结果', {
+        hasProcessedResult: !!processedResult,
+        hasParsedMessage: !!processedResult?.parsedMessage
+      });
       return { error: '无效的消息处理结果' };
     }
     
@@ -109,6 +210,13 @@ class CustomerBehaviorStrategy {
       const timestamp = processedResult.timestamp || Date.now();
       const intent = processedResult.bestIntent?.intent || 'unknown';
       
+      this.logger.debug('开始处理客户行为分析', {
+        clientId,
+        intent,
+        keywordsCount: keywords.length,
+        contentLength: content?.length
+      });
+      
       // 获取或创建客户资料
       const profile = this.getOrCreateProfile(clientId);
       
@@ -118,8 +226,12 @@ class CustomerBehaviorStrategy {
       // 分析行为特征
       const behaviorTraits = this.analyzeBehaviorTraits(profile);
       
+      // 获取推荐的交互方式
+      const recommendedApproach = this.getRecommendedApproach(behaviorTraits);
+      
       // 构建返回结果
-      return {
+      const result = {
+        success: true,
         clientId,
         customerInfo: {
           lastActivity: timestamp,
@@ -127,11 +239,50 @@ class CustomerBehaviorStrategy {
           dominantTrait: behaviorTraits.dominantTrait,
           traits: behaviorTraits.traits
         },
-        recommendedApproach: this.getRecommendedApproach(behaviorTraits)
+        recommendedApproach,
+        insights: {
+          isNewCustomer: profile.messageCount === 1,
+          isFrequentCustomer: profile.messageCount > 10,
+          topKeywords: Object.entries(profile.keywords)
+            .sort(([,a], [,b]) => b - a)
+            .slice(0, 5)
+            .map(([keyword]) => keyword),
+          topIntents: Object.entries(profile.intents)
+            .sort(([,a], [,b]) => b - a)
+            .slice(0, 3)
+            .map(([intent]) => intent)
+        }
       };
+      
+      this.logger.debug('客户行为分析处理完成', {
+        clientId,
+        messageCount: profile.messageCount,
+        dominantTrait: behaviorTraits.dominantTrait,
+        isNewCustomer: result.insights.isNewCustomer
+      });
+      
+      return result;
     } catch (error) {
-      console.error('客户行为分析出错:', error);
-      return { error: error.message };
+      this.logger.error('客户行为分析出错', {
+        error: error.message,
+        clientId: sessionContext?.id,
+        intent: processedResult?.bestIntent?.intent
+      });
+      
+      if (this.errorHandler) {
+        this.errorHandler.handle(error, { 
+          context: 'CustomerBehaviorStrategy.process',
+          processedResult,
+          sessionContext
+        });
+      }
+      
+      return { 
+        success: false,
+        error: error.message 
+      };
+    } finally {
+      timer?.end();
     }
   }
   
@@ -296,23 +447,41 @@ class CustomerBehaviorStrategy {
    * 清理旧的客户资料
    */
   cleanupOldProfiles() {
-    // 将所有资料按最后活动时间排序
-    const profilesArray = [];
-    this.customerProfiles.forEach((profile, clientId) => {
-      profilesArray.push({ id: clientId, lastActivity: profile.lastActivity });
-    });
-    
-    profilesArray.sort((a, b) => a.lastActivity - b.lastActivity);
-    
-    // 删除最旧的10%资料
-    const deleteCount = Math.ceil(this.customerProfiles.size * 0.1);
-    for (let i = 0; i < deleteCount; i++) {
-      if (i < profilesArray.length) {
-        this.customerProfiles.delete(profilesArray[i].id);
+    try {
+      const originalSize = this.customerProfiles.size;
+      
+      // 将所有资料按最后活动时间排序
+      const profilesArray = [];
+      this.customerProfiles.forEach((profile, clientId) => {
+        profilesArray.push({ id: clientId, lastActivity: profile.lastActivity });
+      });
+      
+      profilesArray.sort((a, b) => a.lastActivity - b.lastActivity);
+      
+      // 删除最旧的10%资料
+      const deleteCount = Math.ceil(this.customerProfiles.size * 0.1);
+      for (let i = 0; i < deleteCount; i++) {
+        if (i < profilesArray.length) {
+          this.customerProfiles.delete(profilesArray[i].id);
+        }
+      }
+      
+      this.logger.info('清理旧的客户资料完成', {
+        originalSize,
+        deletedCount: deleteCount,
+        currentSize: this.customerProfiles.size,
+        cleanupPercentage: '10%'
+      });
+    } catch (error) {
+      this.logger.error('清理客户资料失败', {
+        error: error.message,
+        profilesCount: this.customerProfiles.size
+      });
+      
+      if (this.errorHandler) {
+        this.errorHandler.handle(error, { context: 'CustomerBehaviorStrategy.cleanupOldProfiles' });
       }
     }
-    
-    console.log(`清理了 ${deleteCount} 条旧的客户资料`);
   }
   
   /**
@@ -346,11 +515,32 @@ class CustomerBehaviorStrategy {
    * 清理资源
    */
   dispose() {
-    if (this.saveIntervalId) {
-      clearInterval(this.saveIntervalId);
+    try {
+      this.logger.info('开始清理CustomerBehaviorStrategy资源', {
+        profilesCount: this.customerProfiles.size,
+        hasSaveInterval: !!this.saveIntervalId
+      });
+      
+      // 清理定时任务
+      if (this.saveIntervalId) {
+        clearInterval(this.saveIntervalId);
+        this.saveIntervalId = null;
+      }
+      
+      // 保存数据
+      this.saveData();
+      
+      this.logger.info('CustomerBehaviorStrategy资源清理完成');
+    } catch (error) {
+      this.logger.error('清理CustomerBehaviorStrategy资源失败', {
+        error: error.message
+      });
+      
+      if (this.errorHandler) {
+        this.errorHandler.handle(error, { context: 'CustomerBehaviorStrategy.dispose' });
+      }
     }
-    this.saveData();
   }
 }
 
-module.exports = CustomerBehaviorStrategy; 
+export default CustomerBehaviorStrategy;

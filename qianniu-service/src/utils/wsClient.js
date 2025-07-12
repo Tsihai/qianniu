@@ -2,8 +2,8 @@
  * WebSocket客户端测试工具
  * 用于测试WebSocket服务器的连接与消息
  */
-const WebSocket = require('ws');
-const readline = require('readline');
+import WebSocket from 'ws';
+import readline from 'readline';
 
 // 创建命令行交互接口
 const rl = readline.createInterface({
@@ -168,4 +168,4 @@ function startCommandLine() {
 }
 
 // 启动客户端
-connect(); 
+connect();

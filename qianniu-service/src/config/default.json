@@ -1,0 +1,206 @@
+{
+  "app": {
+    "name": "千牛客服自动化系统",
+    "version": "1.0.0",
+    "environment": "development",
+    "debug": true
+  },
+  "server": {
+    "port": 3000,
+    "host": "localhost",
+    "timeout": 30000
+  },
+  "websocket": {
+    "port": 8080,
+    "path": "/ws",
+    "heartbeat": {
+      "interval": 30000,
+      "timeout": 5000
+    },
+    "maxConnections": 1000,
+    "compression": true
+  },
+  "database": {
+    "type": "mongodb",
+    "mockMode": false,
+    "enablePersistence": true,
+    "mongodb": {
+      "uri": "mongodb://localhost:27017/qianniu",
+      "options": {
+        "useNewUrlParser": true,
+        "useUnifiedTopology": true,
+        "maxPoolSize": 10,
+        "serverSelectionTimeoutMS": 5000,
+        "socketTimeoutMS": 45000
+      }
+    },
+    "sqlite": {
+      "dbPath": "./data/qianniu.db",
+      "options": {
+        "busyTimeout": 30000,
+        "cacheSize": 2000,
+        "journalMode": "WAL",
+        "synchronous": "NORMAL",
+        "tempStore": "MEMORY"
+      },
+      "pool": {
+        "max": 10,
+        "min": 1,
+        "acquireTimeoutMillis": 30000,
+        "createTimeoutMillis": 30000,
+        "destroyTimeoutMillis": 5000,
+        "idleTimeoutMillis": 30000
+      }
+    },
+    "json": {
+      "dataDir": "./data",
+      "autoSave": true,
+      "saveInterval": 5000,
+      "backupEnabled": true,
+      "backupInterval": 3600000,
+      "maxBackups": 5
+    }
+  },
+  "logging": {
+    "level": "debug",
+    "format": "combined",
+    "enableConsole": true,
+    "enableFile": false,
+    "file": {
+      "path": "./logs",
+      "filename": "app.log",
+      "maxSize": "10m",
+      "maxFiles": "7d"
+    },
+    "modules": {
+      "websocket": "info",
+      "database": "warn",
+      "business": "debug",
+      "performance": "info"
+    }
+  },
+  "performance": {
+    "monitoring": {
+      "enabled": true,
+      "bufferSize": 1000,
+      "collectInterval": 5000,
+      "cleanupInterval": 300000,
+      "maxDataAge": 3600000
+    },
+    "connectionPool": {
+      "monitoring": {
+        "enabled": true,
+        "collectInterval": 10000,
+        "thresholds": {
+          "utilizationWarning": 0.8,
+          "utilizationCritical": 0.9,
+          "pendingRequestsWarning": 5,
+          "pendingRequestsCritical": 10
+        }
+      }
+    },
+    "systemMetrics": {
+      "enabled": true,
+      "cpuThreshold": 80,
+      "memoryThreshold": 85
+    },
+    "customMetrics": {
+      "enabled": true
+    },
+    "alerts": {
+      "enabled": true,
+      "rules": [
+        {
+          "name": "高CPU使用率",
+          "metric": "cpu",
+          "threshold": 90,
+          "operator": ">",
+          "duration": 60000
+        },
+        {
+          "name": "高内存使用率",
+          "metric": "memory",
+          "threshold": 90,
+          "operator": ">",
+          "duration": 60000
+        }
+      ]
+    }
+  },
+  "business": {
+    "intent": {
+      "confidence": {
+        "threshold": 0.7,
+        "fallback": 0.3
+      },
+      "templates": {
+        "cacheSize": 100,
+        "refreshInterval": 300000
+      }
+    },
+    "session": {
+      "timeout": 1800000,
+      "maxSessions": 10000,
+      "cleanupInterval": 300000
+    },
+    "message": {
+      "maxLength": 2000,
+      "rateLimiting": {
+        "enabled": true,
+        "maxPerMinute": 60,
+        "maxPerHour": 1000
+      }
+    }
+  },
+  "security": {
+    "cors": {
+      "enabled": true,
+      "origins": ["http://localhost:3000"],
+      "methods": ["GET", "POST", "PUT", "DELETE"],
+      "allowedHeaders": ["Content-Type", "Authorization"]
+    },
+    "rateLimit": {
+      "enabled": true,
+      "windowMs": 900000,
+      "max": 100
+    },
+    "encryption": {
+      "algorithm": "aes-256-gcm",
+      "keyLength": 32
+    }
+  },
+  "audit": {
+    "enabled": true,
+    "level": "info",
+    "file": {
+      "path": "./logs",
+      "format": "json",
+      "maxSize": "10MB",
+      "maxFiles": 5
+    },
+    "operations": {
+      "logRead": true,
+      "logWrite": true,
+      "logValidation": true,
+      "logReload": true
+    }
+  },
+  "features": {
+    "autoResponse": {
+      "enabled": true,
+      "delay": {
+        "min": 500,
+        "max": 2000
+      }
+    },
+    "analytics": {
+      "enabled": true,
+      "retention": "30d"
+    },
+    "backup": {
+      "enabled": false,
+      "interval": "daily",
+      "retention": "7d"
+    }
+  }
+}
